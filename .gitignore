@@ -1,0 +1,6 @@
+_static
+.venv
+.vscode
+cartpole-agent
+cartpole-training
+*/__pycache__
