@@ -1,0 +1,17 @@
+# HPC install (CUDA 12.4, for A100 clusters):
+#   pip install -r requirements.txt
+#
+# macOS / CPU-only install: remove the +cu124 suffix and the --extra-index-url line,
+# or just run: pip install torch gymnasium[atari] ale-py AutoROM numpy tensorboard wandb pillow
+
+torch==2.8.0+cu124
+--extra-index-url https://download.pytorch.org/whl/cu124
+
+gymnasium==1.3.0
+ale-py==0.11.2
+AutoROM==0.6.1
+numpy==2.4.4
+opencv-python-headless==4.13.0.92
+tensorboard==2.20.0
+wandb==0.18.7
+pillow==11.3.0

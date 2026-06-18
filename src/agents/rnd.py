@@ -16,10 +16,6 @@ Run from project root with the venv active:
 import os
 import sys
 
-_venv = os.path.join(os.path.dirname(__file__), "..", "..", ".venv")
-if not sys.prefix.startswith(os.path.realpath(_venv)):
-    sys.exit(f"Error: run inside the project venv.\n  source .venv/bin/activate")
-
 import argparse
 import random
 import time
@@ -75,6 +71,15 @@ def parse_args():
                    help="Fraction of minibatch samples used to train the RND predictor")
     p.add_argument("--obs-norm-init-steps", type=int, default=50,
                    help="Iterations of random rollouts to initialize obs running stats")
+    # infrastructure
+    p.add_argument("--sync-envs", action="store_true",
+                   help="Use SyncVectorEnv instead of AsyncVectorEnv (easier debugging)")
+    p.add_argument("--runs-dir", default="runs", help="Directory for TensorBoard logs")
+    p.add_argument("--videos-dir", default="videos", help="Directory for recorded videos")
+    p.add_argument("--checkpoint-dir", default="checkpoints", help="Directory to save checkpoints")
+    p.add_argument("--checkpoint-interval", type=int, default=100,
+                   help="Save a checkpoint every N iterations")
+    p.add_argument("--resume", default=None, help="Path to checkpoint .pt file to resume from")
     return p.parse_args()
 
 
@@ -187,6 +192,41 @@ class RewardForwardFilter:
         return self.rewems
 
 
+def _save_checkpoint(path, iteration, global_step, agent, rnd_model, optimizer,
+                     obs_rms, reward_rms, reward_filter, args):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save({
+        "iteration": iteration,
+        "global_step": global_step,
+        "agent_state_dict": agent.state_dict(),
+        "rnd_model_state_dict": rnd_model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "obs_rms_mean": obs_rms.mean,
+        "obs_rms_var": obs_rms.var,
+        "obs_rms_count": obs_rms.count,
+        "reward_rms_mean": reward_rms.mean,
+        "reward_rms_var": reward_rms.var,
+        "reward_rms_count": reward_rms.count,
+        "reward_filter_rewems": reward_filter.rewems,
+        "args": vars(args),
+    }, path)
+
+
+def _load_checkpoint(path, agent, rnd_model, optimizer, obs_rms, reward_rms, reward_filter):
+    ckpt = torch.load(path, weights_only=False)
+    agent.load_state_dict(ckpt["agent_state_dict"])
+    rnd_model.load_state_dict(ckpt["rnd_model_state_dict"])
+    optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+    obs_rms.mean = ckpt["obs_rms_mean"]
+    obs_rms.var = ckpt["obs_rms_var"]
+    obs_rms.count = ckpt["obs_rms_count"]
+    reward_rms.mean = ckpt["reward_rms_mean"]
+    reward_rms.var = ckpt["reward_rms_var"]
+    reward_rms.count = ckpt["reward_rms_count"]
+    reward_filter.rewems = ckpt["reward_filter_rewems"]
+    return ckpt["iteration"], ckpt["global_step"]
+
+
 def _normalize_obs(obs_np, obs_rms, device):
     """Normalise a (N, 1, 84, 84) float32 array with running stats, clip to ±5."""
     mean = torch.from_numpy(obs_rms.mean).to(device)
@@ -207,7 +247,7 @@ def train():
         wandb.init(project=args.wandb_project, sync_tensorboard=True,
                    config=vars(args), name=run_name, save_code=True)
 
-    writer = SummaryWriter(f"runs/{run_name}")
+    writer = SummaryWriter(f"{args.runs_dir}/{run_name}")
     writer.add_text("hyperparameters",
                     "|param|value|\n|-|-|\n" +
                     "\n".join(f"|{k}|{v}|" for k, v in vars(args).items()))
@@ -219,8 +259,9 @@ def train():
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
     print(f"Using device: {device}")
 
-    envs = gym.vector.SyncVectorEnv(
-        [make_env(args.env_id, i, args.capture_video, run_name) for i in range(args.num_envs)]
+    VecCls = gym.vector.SyncVectorEnv if args.sync_envs else gym.vector.AsyncVectorEnv
+    envs = VecCls(
+        [make_env(args.env_id, i, args.capture_video, run_name, args.videos_dir) for i in range(args.num_envs)]
     )
 
     agent = Agent(envs).to(device)
@@ -242,27 +283,37 @@ def train():
     ext_val_buf   = torch.zeros((args.num_steps, args.num_envs), device=device)
     int_val_buf   = torch.zeros((args.num_steps, args.num_envs), device=device)
 
-    # ── obs normalisation init: random rollouts ─────────────────────────────
-    print(f"Initialising obs normalisation ({args.obs_norm_init_steps} iterations)...")
-    next_obs_np, _ = envs.reset(seed=args.seed)
-    frames_buf = []
-    for _ in range(args.obs_norm_init_steps * args.num_steps):
-        acs = envs.action_space.sample()
-        next_obs_np, _, _, _, _ = envs.step(acs)
-        frames_buf.append(next_obs_np[:, 3:4, :, :].astype(np.float32))  # (N, 1, 84, 84)
-        if len(frames_buf) == args.num_envs * args.num_steps:
-            obs_rms.update(np.concatenate(frames_buf, axis=0))
-            frames_buf = []
-    print("Done.")
+    start_iteration = 1
+    global_step = 0
+
+    if args.resume:
+        start_iteration, global_step = _load_checkpoint(
+            args.resume, agent, rnd_model, optimizer, obs_rms, reward_rms, reward_filter
+        )
+        start_iteration += 1
+        print(f"Resumed from {args.resume} at iteration {start_iteration - 1}, global_step={global_step}")
+
+    if not args.resume:
+        # ── obs normalisation init: random rollouts ─────────────────────────
+        print(f"Initialising obs normalisation ({args.obs_norm_init_steps} iterations)...")
+        next_obs_np, _ = envs.reset(seed=args.seed)
+        frames_buf = []
+        for _ in range(args.obs_norm_init_steps * args.num_steps):
+            acs = envs.action_space.sample()
+            next_obs_np, _, _, _, _ = envs.step(acs)
+            frames_buf.append(next_obs_np[:, 3:4, :, :].astype(np.float32))  # (N, 1, 84, 84)
+            if len(frames_buf) == args.num_envs * args.num_steps:
+                obs_rms.update(np.concatenate(frames_buf, axis=0))
+                frames_buf = []
+        print("Done.")
 
     # full reset for training
     next_obs_np, _ = envs.reset(seed=args.seed)
     next_obs  = torch.tensor(next_obs_np, dtype=torch.float32, device=device)
     next_done = torch.zeros(args.num_envs, device=device)
-    global_step = 0
     start_time = time.time()
 
-    for iteration in range(1, num_iterations + 1):
+    for iteration in range(start_iteration, num_iterations + 1):
         if args.anneal_lr:
             frac = 1.0 - (iteration - 1.0) / num_iterations
             optimizer.param_groups[0]["lr"] = frac * args.lr
@@ -425,6 +476,12 @@ def train():
         writer.add_scalar("losses/clipfrac",            np.mean(clipfracs),              global_step)
         writer.add_scalar("losses/fwd_loss",            fwd_loss.item(),                 global_step)
         writer.add_scalar("losses/explained_variance",  explained_var,                   global_step)
+
+        if iteration % args.checkpoint_interval == 0 or iteration == num_iterations:
+            ckpt_path = os.path.join(args.checkpoint_dir, run_name, f"ckpt_{iteration:06d}.pt")
+            _save_checkpoint(ckpt_path, iteration, global_step,
+                             agent, rnd_model, optimizer,
+                             obs_rms, reward_rms, reward_filter, args)
 
     envs.close()
     writer.close()
