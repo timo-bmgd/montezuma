@@ -48,6 +48,10 @@ env = make_vect_envs("ALE/MontezumaRevenge-v5", num_envs=8)
 
 AgileRL (with evolutionary HPO) remains installed but is secondary — relevant only if evolutionary hyperparameter search becomes part of the thesis scope later.
 
+## JupyterHub Path
+
+The repo is cloned to **`~/work/montezuma`** on JupyterHub (not `~/montezuma`). Files outside `~/work/` are deleted when the server stops. All notebook commands and paths use `~/work/montezuma`.
+
 ## Running Agents
 
 Run from the **project root** with the venv active:
