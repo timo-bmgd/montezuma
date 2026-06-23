@@ -3,4 +3,10 @@ _static
 .vscode
 cartpole-agent
 cartpole-training
-*/__pycache__
+**/__pycache__
+runs/
+videos/
+checkpoints/
+logs/
+.DS_Store
+.claude/settings.local.json
