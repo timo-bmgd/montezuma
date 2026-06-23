@@ -35,6 +35,8 @@ def parse_args():
     p.add_argument("--track", action="store_true", help="log to Weights & Biases")
     p.add_argument("--wandb-project", default="montezuma-thesis")
     p.add_argument("--capture-video", action="store_true")
+    p.add_argument("--video-episode-interval", type=int, default=50,
+                   help="Record a video every N episodes (env 0 only, when --capture-video is set)")
     # env
     p.add_argument("--env-id", default="ALE/MontezumaRevenge-v5")
     p.add_argument("--total-timesteps", type=int, default=10_000_000)
@@ -127,7 +129,7 @@ def train():
 
     VecCls = gym.vector.SyncVectorEnv if args.sync_envs else gym.vector.AsyncVectorEnv
     envs = VecCls(
-        [make_env(args.env_id, i, args.capture_video, run_name, args.videos_dir) for i in range(args.num_envs)]
+        [make_env(args.env_id, i, args.capture_video, run_name, args.videos_dir, args.video_episode_interval) for i in range(args.num_envs)]
     )
 
     agent = Agent(envs).to(device)

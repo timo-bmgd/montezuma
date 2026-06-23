@@ -65,7 +65,14 @@ class RoomTracker(gym.Wrapper):
         return int(self.unwrapped.ale.getRAM()[self._ROOM_RAM_ADDR])
 
 
-def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, videos_dir: str = "videos"):
+def make_env(
+    env_id: str,
+    idx: int,
+    capture_video: bool,
+    run_name: str,
+    videos_dir: str = "videos",
+    video_episode_interval: int = 1,
+):
     """Returns a thunk for gym.vector.AsyncVectorEnv (or SyncVectorEnv).
 
     Wrapper stack (inner → outer):
@@ -93,7 +100,8 @@ def make_env(env_id: str, idx: int, capture_video: bool, run_name: str, videos_d
         env = FrameStackObservation(env, 4)
         env = RecordEpisodeStatistics(env)
         if capture_video and idx == 0:
-            env = RecordVideo(env, f"{videos_dir}/{run_name}", disable_logger=True)
+            trigger = lambda ep, n=video_episode_interval: ep % n == 0
+            env = RecordVideo(env, f"{videos_dir}/{run_name}", episode_trigger=trigger, disable_logger=True)
         return env
 
     return thunk
