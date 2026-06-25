@@ -57,8 +57,7 @@ class RoomTracker(gym.Wrapper):
     def step(self, action):
         obs, reward, terminated, truncated, info = super().step(action)
         self._rooms.add(self._room())
-        if terminated or truncated:
-            info["rooms_visited"] = len(self._rooms)
+        info["rooms_visited"] = len(self._rooms)
         return obs, reward, terminated, truncated, info
 
     def _room(self) -> int:

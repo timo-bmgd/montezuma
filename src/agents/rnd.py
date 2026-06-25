@@ -344,16 +344,17 @@ def train():
                 pred, tgt = rnd_model(rnd_obs)
                 intr_buf[step] = ((tgt - pred).pow(2).sum(1) / 2).flatten()
 
-            if "final_info" in infos:
-                for info in infos["final_info"]:
-                    if info is None or "episode" not in info:
+            if "_episode" in infos:
+                for i, ended in enumerate(infos["_episode"]):
+                    if not ended:
                         continue
-                    ep = info["episode"]
-                    print(f"  step={global_step}  return={ep['r']:.1f}  length={ep['l']}")
-                    writer.add_scalar("charts/episodic_return", ep["r"], global_step)
-                    writer.add_scalar("charts/episodic_length", ep["l"], global_step)
-                    if "rooms_visited" in info:
-                        writer.add_scalar("charts/rooms_visited", info["rooms_visited"], global_step)
+                    r = float(infos["episode"]["r"][i])
+                    l = int(infos["episode"]["l"][i])
+                    print(f"  step={global_step}  return={r:.1f}  length={l}")
+                    writer.add_scalar("charts/episodic_return", r, global_step)
+                    writer.add_scalar("charts/episodic_length", l, global_step)
+                    if "rooms_visited" in infos:
+                        writer.add_scalar("charts/rooms_visited", int(infos["rooms_visited"][i]), global_step)
 
         # ── normalise intrinsic rewards ─────────────────────────────────────
         curiosity_np = intr_buf.cpu().numpy()  # (T, N)

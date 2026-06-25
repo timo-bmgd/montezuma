@@ -21,7 +21,9 @@ Python 3.13, `.venv` virtual environment. The VSCode interpreter is configured t
 source .venv/bin/activate
 ```
 
-No `requirements.txt` — packages are managed directly in the venv. Key packages: `ale_py` (0.11.2), `gymnasium` (1.0.0), `torch` (2.8.0), `numpy`, `agilerl` (2.6.1, installed but not the primary framework going forward).
+No `requirements.txt` — packages are managed directly in the venv. Key packages: `ale_py` (0.11.2), `gymnasium` (1.3.0), `torch` (2.8.0), `numpy`, `agilerl` (2.6.1, installed but not the primary framework going forward).
+
+**Gymnasium 1.x vectorized env infos format:** gymnasium 1.x changed the infos format from gymnasium 0.x. Episode data is now in `infos["episode"]["r"][i]` / `infos["episode"]["l"][i]`, masked by `infos["_episode"][i]` (True when env `i` ended an episode). The old `infos["final_info"]` list-of-dicts pattern from CleanRL's original code does NOT work in gymnasium 1.x.
 
 ## ALE Environment Registration
 
