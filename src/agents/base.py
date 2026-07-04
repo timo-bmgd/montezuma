@@ -64,6 +64,49 @@ class RoomTracker(gym.Wrapper):
         return int(self.unwrapped.ale.getRAM()[self._ROOM_RAM_ADDR])
 
 
+class NewRoomRecorder(gym.Wrapper):
+    """Records a video for each episode that sets a new room high-water mark.
+
+    Buffers rgb_array frames in memory during each episode. On episode end,
+    writes an mp4 if rooms_visited exceeds the previous best, otherwise
+    discards the buffer. Requires render_mode="rgb_array" and RoomTracker
+    in the wrapper stack.
+    """
+
+    def __init__(self, env: gym.Env, video_folder: str, fps: int = 30):
+        super().__init__(env)
+        import pathlib
+        self._folder = pathlib.Path(video_folder)
+        self._folder.mkdir(parents=True, exist_ok=True)
+        self._fps = fps
+        self._best_rooms = 0
+        self._frames: list = []
+        self._ep = 0
+
+    def reset(self, **kwargs):
+        obs, info = super().reset(**kwargs)
+        self._frames = [self.render()]
+        return obs, info
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = super().step(action)
+        self._frames.append(self.render())
+        if (terminated or truncated) and "rooms_visited" in info:
+            if info["rooms_visited"] > self._best_rooms:
+                self._best_rooms = info["rooms_visited"]
+                self._write_video()
+            self._frames = []
+            self._ep += 1
+        return obs, reward, terminated, truncated, info
+
+    def _write_video(self):
+        if not self._frames:
+            return
+        import imageio
+        path = self._folder / f"new_room_ep{self._ep:05d}_r{self._best_rooms:02d}.mp4"
+        imageio.mimwrite(str(path), self._frames, fps=self._fps)
+
+
 def make_env(
     env_id: str,
     idx: int,
@@ -71,6 +114,7 @@ def make_env(
     run_name: str,
     videos_dir: str = "videos",
     video_episode_interval: int = 1,
+    record_room_discovery: bool = False,
 ):
     """Returns a thunk for gym.vector.AsyncVectorEnv (or SyncVectorEnv).
 
@@ -99,8 +143,11 @@ def make_env(
         env = FrameStackObservation(env, 4)
         env = RecordEpisodeStatistics(env)
         if capture_video and idx == 0:
-            trigger = lambda ep, n=video_episode_interval: ep % n == 0
-            env = RecordVideo(env, f"{videos_dir}/{run_name}", episode_trigger=trigger, disable_logger=True)
+            if record_room_discovery:
+                env = NewRoomRecorder(env, f"{videos_dir}/{run_name}/room_discovery")
+            else:
+                trigger = lambda ep, n=video_episode_interval: ep % n == 0
+                env = RecordVideo(env, f"{videos_dir}/{run_name}", episode_trigger=trigger, disable_logger=True)
         return env
 
     return thunk
