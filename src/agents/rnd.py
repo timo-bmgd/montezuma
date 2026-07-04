@@ -43,6 +43,8 @@ def parse_args():
     p.add_argument("--track", action="store_true", help="log to Weights & Biases")
     p.add_argument("--wandb-project", default="montezuma-thesis")
     p.add_argument("--capture-video", action="store_true")
+    p.add_argument("--video-episode-interval", type=int, default=100,
+                   help="Record a video every N episodes (env 0 only, when --capture-video is set)")
     # env
     p.add_argument("--env-id", default="ALE/MontezumaRevenge-v5")
     p.add_argument("--total-timesteps", type=int, default=10_000_000)
@@ -261,7 +263,7 @@ def train():
 
     VecCls = gym.vector.SyncVectorEnv if args.sync_envs else gym.vector.AsyncVectorEnv
     envs = VecCls(
-        [make_env(args.env_id, i, args.capture_video, run_name, args.videos_dir) for i in range(args.num_envs)]
+        [make_env(args.env_id, i, args.capture_video, run_name, args.videos_dir, args.video_episode_interval) for i in range(args.num_envs)]
     )
 
     agent = Agent(envs).to(device)
@@ -467,16 +469,24 @@ def train():
 
         sps = int(global_step / (time.time() - start_time))
         print(f"iteration={iteration}/{num_iterations}  SPS={sps}")
-        writer.add_scalar("charts/learning_rate",       optimizer.param_groups[0]["lr"], global_step)
-        writer.add_scalar("charts/SPS",                 sps,                             global_step)
-        writer.add_scalar("charts/mean_intrinsic_rew",  intr_buf.mean().item(),          global_step)
-        writer.add_scalar("losses/value_loss",          v_loss.item(),                   global_step)
-        writer.add_scalar("losses/policy_loss",         pg_loss.item(),                  global_step)
-        writer.add_scalar("losses/entropy",             entropy.mean().item(),           global_step)
-        writer.add_scalar("losses/approx_kl",           approx_kl.item(),                global_step)
-        writer.add_scalar("losses/clipfrac",            np.mean(clipfracs),              global_step)
-        writer.add_scalar("losses/fwd_loss",            fwd_loss.item(),                 global_step)
-        writer.add_scalar("losses/explained_variance",  explained_var,                   global_step)
+        writer.add_scalar("charts/learning_rate",           optimizer.param_groups[0]["lr"],         global_step)
+        writer.add_scalar("charts/SPS",                     sps,                                     global_step)
+        writer.add_scalar("charts/mean_intrinsic_rew",      intr_buf.mean().item(),                  global_step)
+        writer.add_scalar("charts/raw_intrinsic_rew_mean",  float(curiosity_np.mean()),              global_step)
+        writer.add_scalar("charts/raw_intrinsic_rew_std",   float(curiosity_np.std()),               global_step)
+        writer.add_scalar("charts/obs_rms_std",             float(np.sqrt(obs_rms.var.mean())),      global_step)
+        writer.add_scalar("charts/reward_rms_std",          float(np.sqrt(reward_rms.var)),          global_step)
+        writer.add_scalar("charts/ext_value_mean",          ext_val_buf.mean().item(),               global_step)
+        writer.add_scalar("charts/int_value_mean",          int_val_buf.mean().item(),               global_step)
+        writer.add_scalar("losses/value_loss",              v_loss.item(),                           global_step)
+        writer.add_scalar("losses/ext_v_loss",              ext_v_loss.item(),                       global_step)
+        writer.add_scalar("losses/int_v_loss",              int_v_loss.item(),                       global_step)
+        writer.add_scalar("losses/policy_loss",             pg_loss.item(),                          global_step)
+        writer.add_scalar("losses/entropy",                 entropy.mean().item(),                   global_step)
+        writer.add_scalar("losses/approx_kl",               approx_kl.item(),                        global_step)
+        writer.add_scalar("losses/clipfrac",                np.mean(clipfracs),                      global_step)
+        writer.add_scalar("losses/fwd_loss",                fwd_loss.item(),                         global_step)
+        writer.add_scalar("losses/explained_variance",      explained_var,                           global_step)
 
         if iteration % args.checkpoint_interval == 0 or iteration == num_iterations:
             ckpt_path = os.path.join(args.checkpoint_dir, run_name, f"ckpt_{iteration:06d}.pt")
