@@ -8,10 +8,10 @@ Bachelor thesis: testing and comparing exploration algorithms for playing and so
 
 ALE documentation: https://ale.farama.org/
 
-**Algorithm roadmap** (in planned order):
-1. Count-based exploration — baseline to demonstrate limitations on hard-exploration games
-2. RND (Random Network Distillation) — key algorithm of interest
-3. PPO — standard policy gradient baseline
+**Algorithm roadmap** (in planned order) — all three are implemented in `src/agents/`:
+1. Count-based exploration (`count_based.py`) — baseline to demonstrate limitations on hard-exploration games
+2. RND (Random Network Distillation) (`rnd.py`) — key algorithm of interest
+3. PPO (`ppo.py`) — standard policy gradient baseline
 
 ## Environment Setup
 
@@ -54,6 +54,14 @@ AgileRL (with evolutionary HPO) remains installed but is secondary — relevant 
 
 The repo is cloned to **`~/work/montezuma`** on JupyterHub (not `~/montezuma`). Files outside `~/work/` are deleted when the server stops. All notebook commands and paths use `~/work/montezuma`.
 
+Two notebooks drive the JupyterHub workflow:
+- `jupyter-setup.ipynb` — one-time environment setup: clone/pull the repo, `pip install` Atari/RL deps (numpy pinned `<2` — see below), download ROMs, run a smoke test.
+- `training-runs.ipynb` — quick-launch notebook for production training jobs. A `launch()` helper wraps `nohup` + a `gpu=` param that sets `CUDA_VISIBLE_DEVICES`, so multiple jobs (e.g. two RND seeds + a PPO baseline) can run in parallel across separate GPUs on a multi-GPU JupyterHub instance.
+
+`--sync-envs` is required on JupyterHub for every run: `AsyncVectorEnv` uses Python multiprocessing, which is unreliable inside Jupyter/container environments (`RuntimeError: Numpy is not available`). `--sync-envs` falls back to the single-process `SyncVectorEnv`.
+
+Production runs should pass a large `--checkpoint-interval` (e.g. `99999`) to effectively disable checkpointing — checkpoints otherwise fill the JupyterHub disk quota over long runs.
+
 ## Running Agents
 
 Run from the **project root** with the venv active:
@@ -65,6 +73,10 @@ source .venv/bin/activate
 python src/agents/ppo.py
 python src/agents/ppo.py --total-timesteps 1000000 --num-envs 4
 
+# RND (Random Network Distillation)
+python src/agents/rnd.py
+python src/agents/rnd.py --total-timesteps 10000000 --num-envs 8
+
 # Count-based exploration
 python src/agents/count_based.py
 python src/agents/count_based.py --exploration-coef 0.1 --hash-dim 128
@@ -73,25 +85,26 @@ python src/agents/count_based.py --exploration-coef 0.1 --hash-dim 128
 tensorboard --logdir runs
 ```
 
-Key flags shared by all agents: `--seed`, `--num-envs`, `--total-timesteps`, `--capture-video`, `--track` (W&B).
+Key flags shared by all agents: `--seed`, `--num-envs`, `--total-timesteps`, `--capture-video`, `--track` (W&B), `--sync-envs` (required on JupyterHub), `--runs-dir`/`--videos-dir`/`--checkpoint-dir`, `--checkpoint-interval`, `--resume <path>`, `--record-room-discovery` (record on new room high-water mark instead of periodic interval), `--video-episode-interval`. `ppo.py` and `rnd.py` additionally support `--clip-reward`/`--no-clip-reward` (default on).
 
 ## Source Code Structure (`src/`)
 
 ```
 src/
 ├── agents/
-│   ├── base.py          # Shared: NatureCNN, layer_init, make_env, RoomTracker
+│   ├── base.py          # Shared: NatureCNN, layer_init, make_env, RoomTracker, NewRoomRecorder
 │   ├── ppo.py           # PPO (CleanRL-style, standalone runnable)
 │   ├── count_based.py   # PPO + SimHash count-based exploration bonus
-│   └── rnd.py           # PPO + RND (to be built)
+│   └── rnd.py           # PPO + RND (raw curiosity signal, normalisation stats, dual value heads)
 ```
 
 Each agent file is a self-contained runnable script that imports shared utilities from `base.py`. The `sys.path.insert` at the top of each agent file makes them runnable from the project root without installing the package.
 
 `base.py` provides:
 - `NatureCNN` — Nature DQN CNN backbone `(N, 4, 84, 84) → (N, 512)`
-- `make_env(env_id, idx, capture_video, run_name)` — builds the standard Atari preprocessing stack; passes `frameskip=1` to `gym.make` so `AtariPreprocessing` handles frame-skipping without duplication
+- `make_env(env_id, idx, capture_video, run_name, videos_dir="videos", video_episode_interval=1, record_room_discovery=False, clip_reward=True)` — builds the standard Atari preprocessing stack; passes `frameskip=1` to `gym.make` so `AtariPreprocessing` handles frame-skipping without duplication. Wrapper stack: `ALE env → RoomTracker → AtariPreprocessing → FrameStackObservation → RecordEpisodeStatistics → [ClipReward] → [RecordVideo or NewRoomRecorder]`. `ClipReward` is applied after `RecordEpisodeStatistics` so logged episodic return is always true game score; only the training reward is clipped to `[-1, 1]` (matches the RND paper's preprocessing, Burda et al. 2018, Appendix A.3).
 - `RoomTracker` — wrapper that reads room number from Atari RAM byte 3, adds `rooms_visited` to episode-end info
+- `NewRoomRecorder` — wrapper that buffers rgb frames per episode and writes an mp4 only when `rooms_visited` exceeds the episode's previous best (new room high-water mark), instead of recording on a fixed periodic interval; used via `record_room_discovery=True`
 
 ## Experiment Tracking
 
@@ -122,6 +135,8 @@ env = RecordVideo(
 
 See `examples/recording_sample.py` for a working CartPole example of this pattern.
 
+For exploration runs, `make_env(..., record_room_discovery=True)` swaps this periodic trigger for `NewRoomRecorder` (see above), which only saves a clip when the episode sets a new room high-water mark — much more useful than fixed-interval sampling when most episodes revisit the same early rooms.
+
 ## Evaluation Metrics
 
 Based on literature, report both:
@@ -141,7 +156,7 @@ Sources: [RND paper](https://arxiv.org/abs/1810.12894), [Go-Explore paper](https
 
 ## Repository Structure
 
-- `src/` — main source code (currently being built from scratch)
+- `src/` — main source code (PPO, count-based, and RND agents; see Source Code Structure above)
 - `examples/` — lightweight, standalone reference scripts; keep up to date with current ale_py/gymnasium API
 - `.claude/skills/` — Claude Code skill definitions (see below)
 - `cartpole-training/` — training videos from the CartPole recording example (not relevant to the main project)
