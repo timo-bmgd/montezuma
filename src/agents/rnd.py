@@ -47,6 +47,8 @@ def parse_args():
                    help="Record video only when agent sets a new room high-water mark")
     p.add_argument("--video-episode-interval", type=int, default=100,
                    help="Record a video every N episodes (env 0 only, when --capture-video is set)")
+    p.add_argument("--clip-reward", action=argparse.BooleanOptionalAction, default=True,
+                   help="Clip extrinsic reward to [-1, 1] (standard Atari preprocessing)")
     # env
     p.add_argument("--env-id", default="ALE/MontezumaRevenge-v5")
     p.add_argument("--total-timesteps", type=int, default=10_000_000)
@@ -265,7 +267,8 @@ def train():
 
     VecCls = gym.vector.SyncVectorEnv if args.sync_envs else gym.vector.AsyncVectorEnv
     envs = VecCls(
-        [make_env(args.env_id, i, args.capture_video, run_name, args.videos_dir, args.video_episode_interval, args.record_room_discovery) for i in range(args.num_envs)]
+        [make_env(args.env_id, i, args.capture_video, run_name, args.videos_dir, args.video_episode_interval,
+                  args.record_room_discovery, clip_reward=args.clip_reward) for i in range(args.num_envs)]
     )
 
     agent = Agent(envs).to(device)
@@ -306,7 +309,7 @@ def train():
             acs = envs.action_space.sample()
             next_obs_np, _, _, _, _ = envs.step(acs)
             frames_buf.append(next_obs_np[:, 3:4, :, :].astype(np.float32))  # (N, 1, 84, 84)
-            if len(frames_buf) == args.num_envs * args.num_steps:
+            if len(frames_buf) == args.num_steps:
                 obs_rms.update(np.concatenate(frames_buf, axis=0))
                 frames_buf = []
         print("Done.")

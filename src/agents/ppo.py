@@ -39,6 +39,8 @@ def parse_args():
                    help="Record video only when agent sets a new room high-water mark")
     p.add_argument("--video-episode-interval", type=int, default=50,
                    help="Record a video every N episodes (env 0 only, when --capture-video is set)")
+    p.add_argument("--clip-reward", action=argparse.BooleanOptionalAction, default=True,
+                   help="Clip extrinsic reward to [-1, 1] (standard Atari preprocessing)")
     # env
     p.add_argument("--env-id", default="ALE/MontezumaRevenge-v5")
     p.add_argument("--total-timesteps", type=int, default=10_000_000)
@@ -131,7 +133,8 @@ def train():
 
     VecCls = gym.vector.SyncVectorEnv if args.sync_envs else gym.vector.AsyncVectorEnv
     envs = VecCls(
-        [make_env(args.env_id, i, args.capture_video, run_name, args.videos_dir, args.video_episode_interval, args.record_room_discovery) for i in range(args.num_envs)]
+        [make_env(args.env_id, i, args.capture_video, run_name, args.videos_dir, args.video_episode_interval,
+                  args.record_room_discovery, clip_reward=args.clip_reward) for i in range(args.num_envs)]
     )
 
     agent = Agent(envs).to(device)

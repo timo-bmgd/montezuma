@@ -39,6 +39,8 @@ def parse_args():
     p.add_argument("--track", action="store_true")
     p.add_argument("--wandb-project", default="montezuma-thesis")
     p.add_argument("--capture-video", action="store_true")
+    p.add_argument("--clip-reward", action=argparse.BooleanOptionalAction, default=True,
+                   help="Clip extrinsic reward to [-1, 1] (standard Atari preprocessing)")
     # env
     p.add_argument("--env-id", default="ALE/MontezumaRevenge-v5")
     p.add_argument("--total-timesteps", type=int, default=10_000_000)
@@ -180,7 +182,8 @@ def train():
 
     VecCls = gym.vector.SyncVectorEnv if args.sync_envs else gym.vector.AsyncVectorEnv
     envs = VecCls(
-        [make_env(args.env_id, i, args.capture_video, run_name, args.videos_dir) for i in range(args.num_envs)]
+        [make_env(args.env_id, i, args.capture_video, run_name, args.videos_dir, clip_reward=args.clip_reward)
+         for i in range(args.num_envs)]
     )
 
     agent = Agent(envs).to(device)

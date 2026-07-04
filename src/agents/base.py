@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from gymnasium.wrappers import (
     AtariPreprocessing,
+    ClipReward,
     FrameStackObservation,
     RecordEpisodeStatistics,
     RecordVideo,
@@ -115,16 +116,22 @@ def make_env(
     videos_dir: str = "videos",
     video_episode_interval: int = 1,
     record_room_discovery: bool = False,
+    clip_reward: bool = True,
 ):
     """Returns a thunk for gym.vector.AsyncVectorEnv (or SyncVectorEnv).
 
     Wrapper stack (inner → outer):
       ALE env → RoomTracker → AtariPreprocessing → FrameStackObservation
-        → RecordEpisodeStatistics [→ RecordVideo for idx 0 when capture_video]
+        → RecordEpisodeStatistics → [ClipReward] [→ RecordVideo for idx 0 when capture_video]
 
     terminal_on_life_loss=False so the agent experiences full episodes —
     important for exploration research where we want to reward reaching new rooms,
     not just surviving individual lives.
+
+    ClipReward is applied *after* RecordEpisodeStatistics so episodic_return in infos
+    still reports true game score; only the reward the agent trains on is clipped to
+    [-1, 1], matching the original RND paper's preprocessing (Burda et al., 2018,
+    Appendix A.3) and CleanRL's ppo_atari.py / ppo_rnd_envpool.py.
     """
 
     def thunk():
@@ -142,6 +149,8 @@ def make_env(
         )
         env = FrameStackObservation(env, 4)
         env = RecordEpisodeStatistics(env)
+        if clip_reward:
+            env = ClipReward(env, -1, 1)
         if capture_video and idx == 0:
             if record_room_discovery:
                 env = NewRoomRecorder(env, f"{videos_dir}/{run_name}/room_discovery")
