@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=montezuma-rnd
+#SBATCH --job-name=montezuma-rnd-falsify
 #SBATCH --output=slurm-logs/%x_%j.out
 #SBATCH --error=slurm-logs/%x_%j.err
-#SBATCH --time=20:00:00
+#SBATCH --time=04:00:00
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:a100:1
 #SBATCH --cpus-per-task=32
@@ -10,26 +10,33 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 
-# Do NOT submit this until slurm/run_rnd_falsify.slurm has confirmed the fix below
-# actually resolves the entropy/intrinsic-reward collapse (see that script's header
-# and doc/10M-RND-run-failure-documentation.md section 6). Both prior 10M-step
-# seeds collapsed within ~9% of budget; at this job's scale (100M steps) an
-# unresolved collapse would freeze the policy for the ~20-hour walltime instead of
-# the ~15-18h the original failed runs took, for no additional benefit.
+# Cheap falsification test for the entropy/intrinsic-reward collapse diagnosed in
+# doc/10M-RND-run-failure-documentation.md (see worktree-rnd-10m-failure-doc branch
+# if that doc isn't on your current branch), section 6.
 #
-# ent_coef and anneal-lr below apply the diagnosed fix -- ent_coef=0.001 (paper
-# default) was calibrated for the paper's ~30,000-iteration schedule; raising it
-# ~10x compensates for this run's much shorter effective schedule, and disabling
-# LR annealing avoids exhausting update magnitude before the run ends.
+# Both prior 10M-step seeds collapsed within ~9% of budget (by step ~909,312):
+# entropy fell to ~24-37% of ln(18), raw_intrinsic_rew_mean dropped ~20x, and PPO
+# updates went to no-ops (approx_kl/clipfrac -> ~0) for the remaining ~90% of
+# training. This run tests the fix (raised ent_coef, disabled LR anneal) at a small
+# step budget BEFORE committing to the full 100M-step run_rnd.slurm -- run this
+# first, do not submit run_rnd.slurm until this passes.
+#
+# At num_envs=32, batch_size=4096, so 3,000,000 steps = ~732 iterations -- enough
+# to run well past the ~222-iteration mark equivalent to the prior collapse point.
+#
+# Pass/fail (check TensorBoard, both seeds):
+#   PASS: losses/entropy stays above ~30-40% of ln(18)=2.89, and
+#         charts/raw_intrinsic_rew_mean does not collapse >10x, through at least
+#         the last ~60-70% of iterations; losses/approx_kl and losses/clipfrac
+#         stay meaningfully above 0 throughout.
+#   FAIL: same collapse signature as before reappears early -- do not proceed to
+#         the full run_rnd.slurm; revisit hyperparameters or consider the
+#         alternatives in the exploration-algorithm literature survey instead.
 #
 # Usage:
 #   mkdir -p slurm-logs
-#   sbatch --export=ALL,SEED=1 slurm/run_rnd.slurm
-#   sbatch --export=ALL,SEED=2 slurm/run_rnd.slurm
-#   sbatch --export=ALL,SEED=3 slurm/run_rnd.slurm
-#
-# To resume a preempted job, add to the python command below:
-#   --resume $SCRATCH/checkpoints/<run_name>/ckpt_XXXXXX.pt
+#   sbatch --export=ALL,SEED=1 slurm/run_rnd_falsify.slurm
+#   sbatch --export=ALL,SEED=2 slurm/run_rnd_falsify.slurm
 #
 # --cpus-per-task=32 matches --num-envs 1:1 -- AsyncVectorEnv (the default) spawns
 # one subprocess per env, so fewer CPUs than envs means workers queue for CPU time.
@@ -39,8 +46,7 @@
 # --cpus-per-task to match; SLURM does not reject an over-large request, it queues
 # the job indefinitely in PD state, silently burning walltime budget. Only reduce
 # --num-envs as a last resort (it changes batch_size/num_iterations, so it isn't a
-# free lever -- and this run already depends on num_envs for the entropy-collapse
-# fix above, so touching it would need re-validating via run_rnd_falsify.slurm).
+# free lever).
 
 module purge
 module load python/3.11
@@ -63,7 +69,8 @@ python -c "import torch; assert torch.cuda.is_available(), 'No GPU detected!'; p
 
 python src/agents/rnd.py \
     --env-id ALE/MontezumaRevenge-v5 \
-    --total-timesteps 100000000 \
+    --exp-name rnd_falsify \
+    --total-timesteps 3000000 \
     --num-envs 32 \
     --ent-coef 0.01 \
     --no-anneal-lr \

@@ -2,21 +2,51 @@
 #SBATCH --job-name=montezuma-count
 #SBATCH --output=slurm-logs/%x_%j.out
 #SBATCH --error=slurm-logs/%x_%j.err
-#SBATCH --time=05:00:00
+#SBATCH --time=20:00:00
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:a100:1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=32
 #SBATCH --mem=16G
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 
+# total-timesteps=50,000,000 targets Tang et al. 2017's own reported result (15
+# rooms, ~3,700 score at 50M frames -- see CLAUDE.md's literature benchmark table).
+# Unlike RND, count-based exploration has no gradient-based bonus network to
+# overfit, so it isn't subject to the entropy/intrinsic-collapse failure mode
+# diagnosed for RND -- this is the higher-confidence near-term bet of the two.
+#
+# 20h walltime is a rough estimate, not a measured budget -- if the job times out
+# before finishing, resubmit with --resume (see below) to continue from the last
+# checkpoint; --checkpoint-interval already makes this safe to chain across
+# multiple walltime-limited jobs.
+#
 # Usage:
 #   mkdir -p slurm-logs
 #   sbatch --export=ALL,SEED=1 slurm/run_count_based.slurm
+#
+# To resume a preempted/timed-out job, add to the python command below:
+#   --resume $SCRATCH/checkpoints/<run_name>/ckpt_XXXXXX.pt
+#
+# --cpus-per-task=32 matches --num-envs 1:1 -- AsyncVectorEnv (the default) spawns
+# one subprocess per env, so fewer CPUs than envs means workers queue for CPU time.
+# This has NOT been verified against the real partition -- run:
+#   sinfo -o "%P %c %G"
+# before submitting. If the partition has fewer than 32 cores/GPU, lower
+# --cpus-per-task to match; SLURM does not reject an over-large request, it queues
+# the job indefinitely in PD state, silently burning walltime budget. Only reduce
+# --num-envs as a last resort (it changes batch_size/num_iterations, so it isn't a
+# free lever).
 
 module purge
 module load python/3.11
 module load cuda/12.4
+
+# Untested hypothesis, not yet confirmed by scripts/profile_throughput.py: constrain
+# PyTorch's CPU thread pool so it doesn't additionally oversubscribe the same cores
+# the AsyncVectorEnv worker subprocesses are already contending for.
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$PROJECT_DIR/.venv/bin/activate"
@@ -28,7 +58,7 @@ python -c "import torch; assert torch.cuda.is_available(), 'No GPU detected!'; p
 
 python src/agents/count_based.py \
     --env-id ALE/MontezumaRevenge-v5 \
-    --total-timesteps 10000000 \
+    --total-timesteps 50000000 \
     --num-envs 32 \
     --seed "${SEED:-1}" \
     --track \
