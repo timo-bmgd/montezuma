@@ -7,44 +7,25 @@ degenerates to a flat constant with no exploration signal.
 
 This variant replaces the fixed random projection with a trained autoencoder (Tang et al.,
 2017 — "#Exploration: A Study of Count-Based Exploration for Deep Reinforcement Learning",
-https://arxiv.org/abs/1703.01310, the AE-SimHash / "SmartHash" variant). The encoder's
-sigmoid bottleneck, thresholded at 0.5, is the hash code; a saturation loss plus noise
-injected before decoding pushes the code toward confident, perturbation-robust bits, so
-perceptually similar frames are more likely to collide into the same bucket than under
-raw-pixel hashing.
+https://arxiv.org/abs/1611.04717, the AE-SimHash / "SmartHash" variant -- note this is NOT
+arXiv:1703.01310, a different unrelated paper this file and CLAUDE.md previously mis-cited).
+The encoder's sigmoid bottleneck, thresholded at 0.5, is the hash code; a saturation loss
+plus noise injected before decoding pushes the code toward confident, perturbation-robust
+bits, so perceptually similar frames are more likely to collide into the same bucket than
+under raw-pixel hashing. See AEHashModel's docstring for the exact mechanism, the collapse
+failure mode found during development, and how it was diagnosed and fixed.
 
 The autoencoder is trained online in the same PPO minibatch loop, on the same on-policy
 rollout batch — no replay buffer, no obs/reward running-normalization (the RND obs-norm
 init buffering bug is exactly the class of complexity this variant avoids). Only the
 "train an auxiliary network inside the PPO loop with one combined optimizer" mechanic is
 borrowed from rnd.py; the dual-value-head architecture and reward/obs normalization are not.
+(The paper itself uses a FIFO replay pool with periodic updates rather than training on
+every iteration's on-policy batch -- deliberately not replicated here yet, see AEHashModel.)
 
-`--ae-sat-coef` and `--ae-noise-std` are reasonable starting points, not values transcribed
-from the paper's per-game grid search — treat them as tunable.
-
-Smoke-test finding, first version (84x84 reconstruction target, 20k steps, 4 envs, default
-hyperparameters): the encoder collapsed to a near-constant code within 2-4 iterations
-(charts/ae_code_bit_variance -> 0, unique_states plateaus immediately), and this persisted
-even with --ae-sat-coef 0 --ae-noise-std 0, ruling those two knobs out as the cause. Root
-cause hypothesis: plain per-pixel MSE reconstruction is dominated by the large static
-background, giving the optimizer no gradient incentive to keep any input-dependent
-information in the 64-bit bottleneck. This reproduced the same "no exploration signal"
-failure as the raw-pixel baseline, via a different mechanism (bit-collapse instead of
-hash-explosion).
-
-Follow-up, second version (42x42 downsampled reconstruction target, same smoke test): the
-collapse persists, at essentially the same magnitude and timing (unique_states plateaus at
-98 vs. 110 before, bit variance -> 0 by iteration 3-4 either way). This rules out "sprite is
-too small a fraction of pixels" as the mechanism -- the pixel-count compression ratio into
-the 64-bit bottleneck dropped ~4x (7056 -> 1764 input pixels) with no effect on collapse
-speed or severity. Refined root cause: neither the reconstruction MSE nor the saturation
-loss penalizes producing the *same* code for *different* inputs -- a large, constant,
-input-independent set of logits satisfies the saturation loss trivially, and the decoder can
-still keep lowering reconstruction loss over time by learning one memorized "average frame"
-from that fixed code (consistent with ae_recon_loss improving smoothly throughout while
-bit_variance stays at exactly 0.0). Needs an explicit incentive for the code to vary across
-the batch (e.g. a batch-level code-diversity/variance penalty, or a loss that weights
-frame-to-frame differences more heavily than static background) -- not yet implemented.
+`--ae-sat-coef` is a reasonable starting point, not a value transcribed from the paper's
+per-game grid search — treat it as tunable. `--ae-noise-amplitude` has an actual paper
+requirement (> 0.25) rather than being freely tunable; see AEHashModel's docstring.
 
 Run from project root with the venv active:
     source .venv/bin/activate
@@ -113,9 +94,11 @@ def parse_args():
     p.add_argument("--ae-sat-coef", type=float, default=0.1,
                    help="Weight on the saturation loss pushing latent bits toward 0/1 "
                         "(tunable -- not a value transcribed from the paper, start here and tune)")
-    p.add_argument("--ae-noise-std", type=float, default=0.3,
-                   help="Std of Gaussian noise added to pre-sigmoid latent logits during "
-                        "training (tunable -- not a value transcribed from the paper)")
+    p.add_argument("--ae-noise-amplitude", type=float, default=0.3,
+                   help="Amplitude a of uniform noise U(-a,a) added to the post-sigmoid "
+                        "code before decoding (train-time only). Tang et al. require "
+                        "a > 0.25 for this to actually force distinct states to distinct "
+                        "codes -- see AEHashModel's docstring")
     p.add_argument("--image-log-interval", type=int, default=100,
                    help="Log original-vs-reconstruction image pairs to TensorBoard every N iterations")
     # infrastructure
@@ -132,42 +115,70 @@ def parse_args():
 
 class AEHashModel(nn.Module):
     """Autoencoder producing a saturating, thresholdable binary code for SimHash counting
-    (Tang et al. 2017, AE-SimHash / "SmartHash").
+    (Tang et al. 2017, "#Exploration: A Study of Count-Based Exploration for Deep
+    Reinforcement Learning", https://arxiv.org/abs/1611.04717 -- the AE-SimHash /
+    "SmartHash" variant; note this is NOT arXiv:1703.01310, a different, unrelated paper
+    on PixelCNN density models that an earlier version of this docstring mis-cited).
 
-    Encoder: same conv-trunk shape as NatureCNN/RNDModel (32-64-64 channels), operating on
-    a SINGLE normalised grayscale frame (N, 1, 84, 84) in [0, 1] -- the last frame of the
-    4-stack, matching RND's convention (rnd.py uses next_obs_np[:, 3:4, :, :]).
+    Encoder: conv-trunk shape similar to NatureCNN/RNDModel (32-64-64 channels), operating
+    on a SINGLE normalised grayscale frame (N, 1, 84, 84) in [0, 1] -- the last frame of the
+    4-stack, matching RND's convention (rnd.py uses next_obs_np[:, 3:4, :, :]) -- downsampled
+    to 42x42 before the conv trunk (see `downsample`).
 
-    Bottleneck: Linear(3136, hash_dim) -> [+Gaussian noise, train-time only] -> sigmoid.
-    The noise forces the saturation loss to push bits toward confident 0/1 values that
-    survive the perturbation, which is what makes nearby/perceptually-similar states
-    collide onto the same hash code -- the mechanism that fixes raw-pixel SimHash's failure.
+    Bottleneck: Linear(3136, hash_dim) -> sigmoid -> b_clean. Per Tang et al. Section 2.3 /
+    Eq. 3, at train time uniform noise U(-a, a) is added to b_clean (NOT to the pre-sigmoid
+    logits) before decoding: b_for_decode = b_clean + noise. This is the paper's actual
+    anti-collapse mechanism, and its placement matters -- the paper states that with
+    a > 1/4, the decoder can only reconstruct two distinct inputs correctly if their clean
+    codes are spread far enough apart to survive the noise, which directly incentivizes
+    distinct inputs to get distinct codes. Adding noise to the *pre-sigmoid* logits instead
+    (this file's first version) doesn't have this property: a network can trivially defeat
+    Gaussian logit noise by learning large-magnitude, input-independent logits, which
+    saturate through the sigmoid regardless of the noise -- consistent with what was
+    observed empirically (see below). The saturation loss (ae_sat_loss, computed by the
+    caller) is evaluated on b_clean, matching the paper's stated motivation of preventing
+    unused bits from fluctuating near 0.5, not on the noised value.
 
     Decoder mirrors the encoder exactly via ConvTranspose2d with matching kernel/stride
     (output_padding=1 on the middle layer compensates for the floor-rounding the forward
     conv introduces going 20->9): 7x7 -> 9x9 -> 20x20 -> 42x42 (encoder: 42x42 -> 20x20 ->
     9x9 -> 7x7 reversed).
 
-    Follow-up to the initial raw-84x84 version: that version's encoder collapsed to a
-    near-constant code within a few iterations (bit variance -> 0) regardless of the
-    saturation-loss/noise settings (confirmed via ablation with both disabled). This
-    version downsamples the frame to 42x42 (exactly half of 84x84, via area interpolation)
-    before hashing/reconstructing, matching Tang et al.'s original preprocessing more
-    closely than reconstructing the full 84x84 frame. The exact resize resolution/method
-    used in the paper's appendix isn't confidently known here -- 42x42/area-interpolation
-    is a reasonable, clearly-labelled choice, not a transcribed paper value. Whether this
-    resolves the collapse (as opposed to just reproducing it at a smaller resolution, since
-    isotropic downsampling alone does not change the sprite's *fraction* of total pixels)
-    is an open empirical question -- re-run the smoke test in the module docstring's
-    verification section after any change here.
+    History of empirical findings on this collapse (each re-run of the module docstring's
+    smoke test):
+    1. Raw 84x84 target, Gaussian pre-sigmoid noise: bit variance -> 0 within 2-4
+       iterations, persisted with --ae-sat-coef 0 --ae-noise-std 0 (ruled out those knobs).
+    2. 42x42 downsampled target, same noise scheme: collapse persisted at the same
+       magnitude/timing (ruled out "sprite too small a pixel fraction").
+    3. Post-sigmoid uniform noise (this version, matching the paper's actual mechanism):
+       collapse persisted at the same magnitude/timing as (1) and (2) (unique_states=98,
+       bit variance -> 0 by iteration 3-4). This paper-faithful fix did not resolve it.
+
+    Why (3) plausibly still fails: the noise term only penalizes codes that are close-but-
+    not-identical for different inputs, creating pressure to push them further apart. It
+    does not supply a force that pulls the network back out of a state where the code is
+    already bit-for-bit IDENTICAL for every input -- once collapsed that far, the decoder
+    just needs to invert one fixed noisy value, which is trivially achievable regardless of
+    noise amplitude. All three attempts collapse within 2-4 iterations (256-512 steps),
+    while the policy is still close to random and likely hasn't left the first screen --
+    a short, visually homogeneous window for the paper's mechanism to get a foothold in
+    before full collapse is reached. Untested candidates that address this more directly:
+    an explicit batch-level code-diversity/variance penalty, the paper's FIFO replay pool
+    (training on a more diverse historical sample rather than one small homogeneous
+    on-policy batch), or simply verifying whether collapse persists over a much longer run
+    once the agent has encountered more visually distinct states.
+
+    Further paper-fidelity gaps, known and deliberately not addressed to isolate the above
+    experiments: the paper uses a 52x52 input (not 42x42) and a pixel-wise softmax
+    reconstruction loss (not MSE).
     """
 
-    _DOWNSAMPLE_SIZE = 42  # exactly half of 84x84 -- a clean integer factor, not a paper-verified value
+    _DOWNSAMPLE_SIZE = 42  # paper actually uses 52x52; kept at 42 here to isolate the noise-placement fix
 
-    def __init__(self, hash_dim: int = 64, noise_std: float = 0.3):
+    def __init__(self, hash_dim: int = 64, noise_amplitude: float = 0.3):
         super().__init__()
         self.hash_dim = hash_dim
-        self.noise_std = noise_std
+        self.noise_amplitude = noise_amplitude
 
         self.encoder_conv = nn.Sequential(
             layer_init(nn.Conv2d(1, 32, 4, stride=2)),
@@ -196,18 +207,21 @@ class AEHashModel(nn.Module):
         """x: (N, 1, 84, 84) float in [0, 1] -> (N, 1, 42, 42) via area interpolation."""
         return F.interpolate(x, size=(self._DOWNSAMPLE_SIZE, self._DOWNSAMPLE_SIZE), mode="area")
 
-    def _encode_downsampled(self, x_ds: torch.Tensor, add_noise: bool):
+    def _encode_from_downsampled(self, x_ds: torch.Tensor, add_noise: bool):
+        """Returns (b_clean, b_for_decode). b_for_decode == b_clean unless add_noise."""
         feat = self.encoder_conv(x_ds)
         logits = self.encoder_fc(feat)
-        if add_noise and self.noise_std > 0:
-            logits = logits + torch.randn_like(logits) * self.noise_std
-        b = torch.sigmoid(logits)
-        return logits, b
+        b_clean = torch.sigmoid(logits)
+        if add_noise and self.noise_amplitude > 0:
+            b_for_decode = b_clean + (torch.rand_like(b_clean) * 2 - 1) * self.noise_amplitude
+        else:
+            b_for_decode = b_clean
+        return b_clean, b_for_decode
 
     def encode(self, x: torch.Tensor, add_noise: bool):
-        """x: (N, 1, 84, 84) float in [0, 1] (raw, not yet downsampled). Returns (logits, b),
-        both (N, hash_dim)."""
-        return self._encode_downsampled(self.downsample(x), add_noise)
+        """x: (N, 1, 84, 84) float in [0, 1] (raw, not yet downsampled).
+        Returns (b_clean, b_for_decode), both (N, hash_dim)."""
+        return self._encode_from_downsampled(self.downsample(x), add_noise)
 
     def decode(self, b: torch.Tensor) -> torch.Tensor:
         """Returns (N, 1, 42, 42) -- the downsampled resolution, not the raw 84x84 frame."""
@@ -215,18 +229,19 @@ class AEHashModel(nn.Module):
 
     def forward(self, x: torch.Tensor):
         """Training forward pass: downsample -> noisy code -> reconstruction.
-        Returns (recon, b_noisy, target), where target is the downsampled input the
-        reconstruction should be compared against (not the raw 84x84 frame)."""
+        Returns (recon, b_clean, target): target is the downsampled input the
+        reconstruction should be compared against; b_clean (not the noised code) is what
+        the caller should use for the saturation loss."""
         x_ds = self.downsample(x)
-        _, b = self._encode_downsampled(x_ds, add_noise=True)
-        recon = self.decode(b)
-        return recon, b, x_ds
+        b_clean, b_for_decode = self._encode_from_downsampled(x_ds, add_noise=True)
+        recon = self.decode(b_for_decode)
+        return recon, b_clean, x_ds
 
     @torch.no_grad()
     def binary_code(self, x: torch.Tensor) -> torch.Tensor:
         """Clean (noise-free) binary hash code for counting: (N, hash_dim), values in {0., 1.}."""
-        _, b = self.encode(x, add_noise=False)
-        return (b > 0.5).float()
+        b_clean, _ = self.encode(x, add_noise=False)
+        return (b_clean > 0.5).float()
 
 
 class AEHashCounter:
@@ -336,7 +351,7 @@ def train():
     )
 
     agent = Agent(envs).to(device)
-    ae_model = AEHashModel(hash_dim=args.hash_dim, noise_std=args.ae_noise_std).to(device)
+    ae_model = AEHashModel(hash_dim=args.hash_dim, noise_amplitude=args.ae_noise_amplitude).to(device)
     combined_params = list(agent.parameters()) + list(ae_model.parameters())
     optimizer = optim.Adam(combined_params, lr=args.lr, eps=1e-5)
     counter = AEHashCounter()
@@ -461,9 +476,9 @@ def train():
             for start in range(0, batch_size, minibatch_size):
                 mb = mb_inds[start : start + minibatch_size]
 
-                recon, b_noisy, target = ae_model(ae_input_batch[mb])
+                recon, b_clean, target = ae_model(ae_input_batch[mb])
                 ae_recon_loss = F.mse_loss(recon, target)
-                ae_sat_loss = torch.minimum((1 - b_noisy) ** 2, b_noisy ** 2).sum(dim=1).mean()
+                ae_sat_loss = torch.minimum((1 - b_clean) ** 2, b_clean ** 2).sum(dim=1).mean()
                 ae_loss = args.ae_recon_coef * ae_recon_loss + args.ae_sat_coef * ae_sat_loss
 
                 _, newlogprob, entropy, newvalue = agent.get_action_and_value(
