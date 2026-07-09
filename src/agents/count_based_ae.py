@@ -22,17 +22,29 @@ borrowed from rnd.py; the dual-value-head architecture and reward/obs normalizat
 `--ae-sat-coef` and `--ae-noise-std` are reasonable starting points, not values transcribed
 from the paper's per-game grid search — treat them as tunable.
 
-Smoke-test finding (20k steps, 4 envs, default hyperparameters): the encoder collapses to a
-near-constant code within 2-4 iterations (charts/ae_code_bit_variance -> 0, unique_states
-plateaus immediately), and this persists even with --ae-sat-coef 0 --ae-noise-std 0, ruling
-those two knobs out as the cause. Root cause: plain per-pixel MSE reconstruction is dominated
-by the large static background; the player sprite is a small enough fraction of pixels that
-the optimizer has no gradient incentive to keep any input-dependent information in the
-64-bit bottleneck, so it collapses to reconstructing an "average" frame from a constant code.
-This reproduces the same "no exploration signal" failure as the raw-pixel baseline, via a
-different mechanism (bit-collapse instead of hash-explosion). Needs a follow-up fix (e.g. a
-foreground/motion-weighted reconstruction loss, or downsampling before reconstruction as in
-the paper's original preprocessing) before this is usable for a production run.
+Smoke-test finding, first version (84x84 reconstruction target, 20k steps, 4 envs, default
+hyperparameters): the encoder collapsed to a near-constant code within 2-4 iterations
+(charts/ae_code_bit_variance -> 0, unique_states plateaus immediately), and this persisted
+even with --ae-sat-coef 0 --ae-noise-std 0, ruling those two knobs out as the cause. Root
+cause hypothesis: plain per-pixel MSE reconstruction is dominated by the large static
+background, giving the optimizer no gradient incentive to keep any input-dependent
+information in the 64-bit bottleneck. This reproduced the same "no exploration signal"
+failure as the raw-pixel baseline, via a different mechanism (bit-collapse instead of
+hash-explosion).
+
+Follow-up, second version (42x42 downsampled reconstruction target, same smoke test): the
+collapse persists, at essentially the same magnitude and timing (unique_states plateaus at
+98 vs. 110 before, bit variance -> 0 by iteration 3-4 either way). This rules out "sprite is
+too small a fraction of pixels" as the mechanism -- the pixel-count compression ratio into
+the 64-bit bottleneck dropped ~4x (7056 -> 1764 input pixels) with no effect on collapse
+speed or severity. Refined root cause: neither the reconstruction MSE nor the saturation
+loss penalizes producing the *same* code for *different* inputs -- a large, constant,
+input-independent set of logits satisfies the saturation loss trivially, and the decoder can
+still keep lowering reconstruction loss over time by learning one memorized "average frame"
+from that fixed code (consistent with ae_recon_loss improving smoothly throughout while
+bit_variance stays at exactly 0.0). Needs an explicit incentive for the code to vary across
+the batch (e.g. a batch-level code-diversity/variance penalty, or a loss that weights
+frame-to-frame differences more heavily than static background) -- not yet implemented.
 
 Run from project root with the venv active:
     source .venv/bin/activate
@@ -131,10 +143,26 @@ class AEHashModel(nn.Module):
     survive the perturbation, which is what makes nearby/perceptually-similar states
     collide onto the same hash code -- the mechanism that fixes raw-pixel SimHash's failure.
 
-    Decoder mirrors the encoder exactly via ConvTranspose2d with matching kernel/stride and
-    zero padding/output_padding: 7x7 -> 9x9 -> 20x20 -> 84x84 (encoder: 84x84 -> 20x20 -> 9x9
-    -> 7x7 reversed).
+    Decoder mirrors the encoder exactly via ConvTranspose2d with matching kernel/stride
+    (output_padding=1 on the middle layer compensates for the floor-rounding the forward
+    conv introduces going 20->9): 7x7 -> 9x9 -> 20x20 -> 42x42 (encoder: 42x42 -> 20x20 ->
+    9x9 -> 7x7 reversed).
+
+    Follow-up to the initial raw-84x84 version: that version's encoder collapsed to a
+    near-constant code within a few iterations (bit variance -> 0) regardless of the
+    saturation-loss/noise settings (confirmed via ablation with both disabled). This
+    version downsamples the frame to 42x42 (exactly half of 84x84, via area interpolation)
+    before hashing/reconstructing, matching Tang et al.'s original preprocessing more
+    closely than reconstructing the full 84x84 frame. The exact resize resolution/method
+    used in the paper's appendix isn't confidently known here -- 42x42/area-interpolation
+    is a reasonable, clearly-labelled choice, not a transcribed paper value. Whether this
+    resolves the collapse (as opposed to just reproducing it at a smaller resolution, since
+    isotropic downsampling alone does not change the sprite's *fraction* of total pixels)
+    is an open empirical question -- re-run the smoke test in the module docstring's
+    verification section after any change here.
     """
+
+    _DOWNSAMPLE_SIZE = 42  # exactly half of 84x84 -- a clean integer factor, not a paper-verified value
 
     def __init__(self, hash_dim: int = 64, noise_std: float = 0.3):
         super().__init__()
@@ -142,9 +170,9 @@ class AEHashModel(nn.Module):
         self.noise_std = noise_std
 
         self.encoder_conv = nn.Sequential(
-            layer_init(nn.Conv2d(1, 32, 8, stride=4)),
+            layer_init(nn.Conv2d(1, 32, 4, stride=2)),
             nn.ReLU(),
-            layer_init(nn.Conv2d(32, 64, 4, stride=2)),
+            layer_init(nn.Conv2d(32, 64, 3, stride=2)),
             nn.ReLU(),
             layer_init(nn.Conv2d(64, 64, 3, stride=1)),
             nn.ReLU(),
@@ -158,29 +186,41 @@ class AEHashModel(nn.Module):
             nn.Unflatten(1, (64, 7, 7)),
             layer_init(nn.ConvTranspose2d(64, 64, 3, stride=1)),
             nn.ReLU(),
-            layer_init(nn.ConvTranspose2d(64, 32, 4, stride=2)),
+            layer_init(nn.ConvTranspose2d(64, 32, 3, stride=2, output_padding=1)),
             nn.ReLU(),
-            layer_init(nn.ConvTranspose2d(32, 1, 8, stride=4)),
+            layer_init(nn.ConvTranspose2d(32, 1, 4, stride=2)),
             nn.Sigmoid(),
         )
 
-    def encode(self, x: torch.Tensor, add_noise: bool):
-        """x: (N, 1, 84, 84) float in [0, 1]. Returns (logits, b), both (N, hash_dim)."""
-        feat = self.encoder_conv(x)
+    def downsample(self, x: torch.Tensor) -> torch.Tensor:
+        """x: (N, 1, 84, 84) float in [0, 1] -> (N, 1, 42, 42) via area interpolation."""
+        return F.interpolate(x, size=(self._DOWNSAMPLE_SIZE, self._DOWNSAMPLE_SIZE), mode="area")
+
+    def _encode_downsampled(self, x_ds: torch.Tensor, add_noise: bool):
+        feat = self.encoder_conv(x_ds)
         logits = self.encoder_fc(feat)
         if add_noise and self.noise_std > 0:
             logits = logits + torch.randn_like(logits) * self.noise_std
         b = torch.sigmoid(logits)
         return logits, b
 
+    def encode(self, x: torch.Tensor, add_noise: bool):
+        """x: (N, 1, 84, 84) float in [0, 1] (raw, not yet downsampled). Returns (logits, b),
+        both (N, hash_dim)."""
+        return self._encode_downsampled(self.downsample(x), add_noise)
+
     def decode(self, b: torch.Tensor) -> torch.Tensor:
+        """Returns (N, 1, 42, 42) -- the downsampled resolution, not the raw 84x84 frame."""
         return self.decoder_conv(self.decoder_fc(b))
 
     def forward(self, x: torch.Tensor):
-        """Training forward pass: noisy code -> reconstruction. Returns (recon, b_noisy)."""
-        _, b = self.encode(x, add_noise=True)
+        """Training forward pass: downsample -> noisy code -> reconstruction.
+        Returns (recon, b_noisy, target), where target is the downsampled input the
+        reconstruction should be compared against (not the raw 84x84 frame)."""
+        x_ds = self.downsample(x)
+        _, b = self._encode_downsampled(x_ds, add_noise=True)
         recon = self.decode(b)
-        return recon, b
+        return recon, b, x_ds
 
     @torch.no_grad()
     def binary_code(self, x: torch.Tensor) -> torch.Tensor:
@@ -407,9 +447,12 @@ def train():
         if iteration % args.image_log_interval == 0:
             with torch.no_grad():
                 sample = ae_input_batch[:8]
+                target_ds = ae_model.downsample(sample)
                 _, b_clean_sample = ae_model.encode(sample, add_noise=False)
                 recon_clean = ae_model.decode(b_clean_sample)
-            writer.add_images("debug/ae_original", sample, global_step, dataformats="NCHW")
+            # log the downsampled target, not the raw 84x84 frame -- that's what the
+            # network actually sees and is being trained to reconstruct
+            writer.add_images("debug/ae_original", target_ds, global_step, dataformats="NCHW")
             writer.add_images("debug/ae_reconstruction", recon_clean, global_step, dataformats="NCHW")
 
         clipfracs = []
@@ -418,8 +461,8 @@ def train():
             for start in range(0, batch_size, minibatch_size):
                 mb = mb_inds[start : start + minibatch_size]
 
-                recon, b_noisy = ae_model(ae_input_batch[mb])
-                ae_recon_loss = F.mse_loss(recon, ae_input_batch[mb])
+                recon, b_noisy, target = ae_model(ae_input_batch[mb])
+                ae_recon_loss = F.mse_loss(recon, target)
                 ae_sat_loss = torch.minimum((1 - b_noisy) ** 2, b_noisy ** 2).sum(dim=1).mean()
                 ae_loss = args.ae_recon_coef * ae_recon_loss + args.ae_sat_coef * ae_sat_loss
 
