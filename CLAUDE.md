@@ -152,7 +152,12 @@ Based on literature, report both:
 | RND (OpenAI, 2018) | 24 | ~10,000 | Intrinsic motivation |
 | Go-Explore (Uber, 2019) | 37 / 238 | 43,000 / 650,000 | Without / with domain knowledge |
 
-Sources: [RND paper](https://arxiv.org/abs/1810.12894), [Go-Explore paper](https://arxiv.org/abs/1901.10995), [Count-based paper](https://arxiv.org/abs/1703.01310).
+Sources: [RND paper](https://arxiv.org/abs/1810.12894), [Go-Explore paper](https://arxiv.org/abs/1901.10995), [Count-based paper (Bellemare et al. 2016, pseudo-counts)](https://arxiv.org/abs/1606.01868).
+
+Note: `src/agents/count_based.py`/`count_based_ae.py` in this repo implement a *different* count-based
+method — Tang et al. 2017's SimHash/AE-SimHash approach ([arXiv:1611.04717](https://arxiv.org/abs/1611.04717)),
+not Bellemare's pseudo-count density model above. The two are often confused; the benchmark row above
+reflects Bellemare's numbers specifically.
 
 ## Repository Structure
 
