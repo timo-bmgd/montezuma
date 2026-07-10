@@ -108,6 +108,25 @@ class NewRoomRecorder(gym.Wrapper):
         imageio.mimwrite(str(path), self._frames, fps=self._fps)
 
 
+class OverlayFrameProbe(gym.Wrapper):
+    """Exposes a uniform overlay_render() method across all vector sub-envs.
+
+    Only the active env (idx 0) actually renders; all others return None
+    without touching self.render(). This lets envs.call("overlay_render") be
+    invoked safely on the whole vector env even though only idx 0 was
+    constructed with render_mode="rgb_array" — calling .render() on an env
+    built with render_mode=None raises, and AsyncVectorEnv/SyncVectorEnv's
+    .call() always dispatches to every sub-env with no per-index targeting.
+    """
+
+    def __init__(self, env: gym.Env, active: bool):
+        super().__init__(env)
+        self._active = active
+
+    def overlay_render(self):
+        return self.render() if self._active else None
+
+
 def make_env(
     env_id: str,
     idx: int,
@@ -117,6 +136,7 @@ def make_env(
     video_episode_interval: int = 1,
     record_room_discovery: bool = False,
     clip_reward: bool = True,
+    overlay_video: bool = False,
 ):
     """Returns a thunk for gym.vector.AsyncVectorEnv (or SyncVectorEnv).
 
@@ -135,7 +155,7 @@ def make_env(
     """
 
     def thunk():
-        render_mode = "rgb_array" if (capture_video and idx == 0) else None
+        render_mode = "rgb_array" if (idx == 0 and (capture_video or overlay_video)) else None
         # frameskip=1 disables ALE's built-in repeat; AtariPreprocessing does the skipping instead
         env = gym.make(env_id, frameskip=1, render_mode=render_mode)
         env = RoomTracker(env)
@@ -151,7 +171,9 @@ def make_env(
         env = RecordEpisodeStatistics(env)
         if clip_reward:
             env = ClipReward(env, -1, 1)
-        if capture_video and idx == 0:
+        if overlay_video:
+            env = OverlayFrameProbe(env, active=(idx == 0))
+        elif capture_video and idx == 0:
             if record_room_discovery:
                 env = NewRoomRecorder(env, f"{videos_dir}/{run_name}/room_discovery")
             else:

@@ -41,6 +41,10 @@ def parse_args():
     p.add_argument("--capture-video", action="store_true")
     p.add_argument("--clip-reward", action=argparse.BooleanOptionalAction, default=True,
                    help="Clip extrinsic reward to [-1, 1] (standard Atari preprocessing)")
+    p.add_argument("--overlay-video", action="store_true",
+                   help="Record synced gameplay+dashboard overlay videos (env 0 only)")
+    p.add_argument("--overlay-episode-interval", type=int, default=100,
+                   help="Record overlay video pair every N episodes when --overlay-video is set")
     # env
     p.add_argument("--env-id", default="ALE/MontezumaRevenge-v5")
     p.add_argument("--total-timesteps", type=int, default=10_000_000)
@@ -157,6 +161,8 @@ def _load_checkpoint(path, agent, optimizer):
 
 def train():
     args = parse_args()
+    if args.overlay_video and args.capture_video:
+        raise SystemExit("--overlay-video and --capture-video are mutually exclusive in this first version")
 
     batch_size = args.num_envs * args.num_steps
     minibatch_size = batch_size // args.num_minibatches
@@ -182,9 +188,20 @@ def train():
 
     VecCls = gym.vector.SyncVectorEnv if args.sync_envs else gym.vector.AsyncVectorEnv
     envs = VecCls(
-        [make_env(args.env_id, i, args.capture_video, run_name, args.videos_dir, clip_reward=args.clip_reward)
+        [make_env(args.env_id, i, args.capture_video, run_name, args.videos_dir, clip_reward=args.clip_reward,
+                  overlay_video=args.overlay_video)
          for i in range(args.num_envs)]
     )
+
+    overlay_recorder = None
+    if args.overlay_video:
+        from agents.video_overlay import EpisodeOverlayRecorder
+        overlay_recorder = EpisodeOverlayRecorder(
+            args.videos_dir, run_name,
+            metric_names=["raw_count", "applied_bonus", "unique_states"],
+            main_metric="applied_bonus",
+            episode_trigger=lambda ep, n=args.overlay_episode_interval: ep % n == 0,
+        )
 
     agent = Agent(envs).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.lr, eps=1e-5)
@@ -234,15 +251,26 @@ def train():
 
             # count-based intrinsic reward: increment counter, then compute bonus
             intrinsic = np.zeros(args.num_envs, dtype=np.float32)
+            raw_count0 = None
             for i in range(args.num_envs):
-                counter.increment(next_obs_np[i])
+                n = counter.increment(next_obs_np[i])
                 intrinsic[i] = counter.bonus(next_obs_np[i], args.exploration_coef)
+                if i == 0:
+                    raw_count0 = n
             intrinsic_log.append(intrinsic.mean())
 
             combined_reward = reward + intrinsic
             rew_buf[step] = torch.tensor(combined_reward, dtype=torch.float32, device=device)
             next_obs  = torch.tensor(next_obs_np, dtype=torch.float32, device=device)
             next_done = torch.tensor(next_done_np, dtype=torch.float32, device=device)
+
+            if overlay_recorder is not None:
+                metrics0 = {
+                    "raw_count": float(raw_count0),
+                    "applied_bonus": float(intrinsic[0]),
+                    "unique_states": float(counter.num_unique),
+                }
+                overlay_recorder.capture_step(envs, metrics0, bool(terminated[0]), bool(truncated[0]))
 
             if "_episode" in infos:
                 for i, ended in enumerate(infos["_episode"]):
