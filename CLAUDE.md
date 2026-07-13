@@ -88,7 +88,7 @@ python src/agents/rnd.py --total-timesteps 10000000 --num-envs 8
 tensorboard --logdir runs
 ```
 
-Key flags shared by all agents: `--seed`, `--num-envs`, `--total-timesteps`, `--capture-video`, `--record-room-discovery`, `--video-episode-interval` (default 100 in `rnd.py`/`count_based.py`/`count_based_ae.py`, 50 in `ppo.py` — inconsistent, not yet reconciled), `--clip-reward`/`--no-clip-reward` (default on), `--track` (W&B), `--sync-envs`, `--runs-dir`/`--videos-dir`/`--checkpoint-dir`, `--checkpoint-interval`, `--resume <path>`, `--ent-coef`, `--anneal-lr`/`--no-anneal-lr`. `rnd.py` and `count_based.py` additionally have `--overlay-video`/`--overlay-episode-interval` (synced gameplay+dashboard videos with a bar-meter overlay of one calibrated metric — mutually exclusive with `--capture-video` for now). `rnd.py` additionally has `--int-gamma`, `--int-coef`, `--ext-coef`, `--update-proportion`, `--obs-norm-init-steps`; `count_based.py`/`count_based_ae.py` have `--exploration-coef`/`--hash-dim` (plus `--ae-*` flags for the AE variant). See `doc/running-agents.md` for the fuller reference (not yet updated with every flag above — check the source file's `parse_args()` for the ground truth).
+Key flags shared by all agents: `--seed`, `--num-envs`, `--total-timesteps`, `--capture-video`, `--record-room-discovery`, `--video-episode-interval` (default 100 in `rnd.py`/`count_based.py`/`count_based_ae.py`, 50 in `ppo.py` — inconsistent, not yet reconciled), `--clip-reward`/`--no-clip-reward` (default on), `--track` (W&B), `--sync-envs`, `--runs-dir`/`--videos-dir`/`--checkpoint-dir`, `--checkpoint-interval`, `--resume <path>`, `--ent-coef`, `--anneal-lr`/`--no-anneal-lr`. `rnd.py` and `count_based.py` additionally have `--overlay-video`/`--overlay-episode-interval` (synced gameplay+dashboard videos with a bar-meter overlay of one calibrated metric — mutually exclusive with `--capture-video` for now). `--overlay-video` only *logs* during training (a state snapshot + action sequence + metrics per recorded episode, no rendering/encoding on the critical path); run `scripts/render_overlay_videos.py <videos-dir>/<run_name>` afterward to reconstruct the actual mp4s — see "Video Recording — Overlay Mode" below. `rnd.py` additionally has `--int-gamma`, `--int-coef`, `--ext-coef`, `--update-proportion`, `--obs-norm-init-steps`; `count_based.py`/`count_based_ae.py` have `--exploration-coef`/`--hash-dim` (plus `--ae-*` flags for the AE variant). See `doc/running-agents.md` for the fuller reference (not yet updated with every flag above — check the source file's `parse_args()` for the ground truth).
 
 ## Source Code Structure (`src/`)
 
@@ -106,10 +106,10 @@ Each agent file is a self-contained runnable script that imports shared utilitie
 
 `base.py` provides:
 - `NatureCNN` — Nature DQN CNN backbone `(N, 4, 84, 84) → (N, 512)`
-- `make_env(env_id, idx, capture_video, run_name, videos_dir="videos", video_episode_interval=1, record_room_discovery=False, clip_reward=True, overlay_video=False)` — builds the standard Atari preprocessing stack; passes `frameskip=1` to `gym.make` so `AtariPreprocessing` handles frame-skipping without duplication. Wrapper stack: `ALE env → RoomTracker → AtariPreprocessing → FrameStackObservation → RecordEpisodeStatistics → [ClipReward] → [OverlayFrameProbe, OR RecordVideo optionally + NewRoomRecorder stacked on top]`. `overlay_video` and `capture_video` are mutually exclusive (enforced by each agent's `train()`, not by `make_env()` itself). `ClipReward` is applied after `RecordEpisodeStatistics` so logged episodic return is always true game score; only the training reward is clipped to `[-1, 1]` (matches the RND paper's preprocessing, Burda et al. 2018, Appendix A.3).
+- `make_env(env_id, idx, capture_video, run_name, videos_dir="videos", video_episode_interval=1, record_room_discovery=False, clip_reward=True, overlay_video=False)` — builds the standard Atari preprocessing stack; passes `frameskip=1` to `gym.make` so `AtariPreprocessing` handles frame-skipping without duplication. Wrapper stack: `ALE env → RoomTracker → AtariPreprocessing → FrameStackObservation → RecordEpisodeStatistics → [ClipReward] → [OverlayStateProbe, OR RecordVideo optionally + NewRoomRecorder stacked on top]`. `overlay_video` and `capture_video` are mutually exclusive (enforced by each agent's `train()`, not by `make_env()` itself). `overlay_video` no longer needs `render_mode="rgb_array"` — env 0 only gets it when `capture_video` is set. `ClipReward` is applied after `RecordEpisodeStatistics` so logged episodic return is always true game score; only the training reward is clipped to `[-1, 1]` (matches the RND paper's preprocessing, Burda et al. 2018, Appendix A.3).
 - `RoomTracker` — wrapper that reads room number from Atari RAM byte 3, adds `rooms_visited` to episode-end info
 - `NewRoomRecorder` — wrapper that buffers frames per episode and writes an mp4 only when `rooms_visited` exceeds the previous best (new room high-water mark); see "Video Recording — Room Discovery Mode" below
-- `OverlayFrameProbe` — exposes a uniform `overlay_render()` across all vector sub-envs so `envs.call("overlay_render")` is safe even though only env 0 renders; used by `--overlay-video` (see `src/agents/video_overlay.py`'s `EpisodeOverlayRecorder`)
+- `OverlayStateProbe` — exposes a uniform `overlay_clone_state()` across all vector sub-envs so `envs.call("overlay_clone_state")` is safe even though only env 0 is recorded; used by `--overlay-video` (see `src/agents/video_overlay.py`'s `EpisodeOverlayLogger` and "Video Recording — Overlay Mode" below)
 
 ## Experiment Tracking
 
@@ -147,6 +147,23 @@ See `examples/recording_sample.py` for a working CartPole example of this patter
 Enable with `--capture-video --record-room-discovery`. Videos land in `videos/<run_name>/room_discovery/new_room_ep<N>_r<R>.mp4`.
 
 Standard periodic recording uses `--capture-video --video-episode-interval N` (default 100). Supported by both `rnd.py` and `count_based.py`. `--record-room-discovery` stacks on top of periodic recording (both write to the same run's video folder) rather than replacing it — a single run with both flags produces `rl-video-episode-N.mp4` files and `room_discovery/new_room_ep*.mp4` files together.
+
+## Video Recording — Overlay Mode
+
+`--overlay-video` produces the same synced gameplay+dashboard video pairs as before, but rendering/drawing/encoding no longer happen during training — they were found to add real training-loop overhead (a per-step `.item()` GPU sync in `rnd.py`, plus per-frame PIL/matplotlib/ffmpeg work with no throttle beyond the recording window itself). Training now only *logs* cheap data; a separate script reconstructs the actual videos afterward.
+
+**During training** (`EpisodeOverlayLogger` in `src/agents/video_overlay.py`): for each episode selected by `--overlay-episode-interval`, logs one ALE state snapshot (`OverlayStateProbe.overlay_clone_state()`, taken right before the first captured action) plus that episode's action sequence and per-step metric values, writing one small pickle to `<videos-dir>/<run_name>/overlay_logs/ep<N>.pkl` at episode end. No frames are rendered and no video is encoded during training — env 0 doesn't even need `render_mode="rgb_array"` for this (`clone_state()` works regardless of render mode).
+
+This works because ALE is fully deterministic given a cloned state: `clone_state(include_rng=True)` captures the emulator's internal RNG (the one `repeat_action_probability` sticky-action draws come from), so `restore_state()` + replaying the exact same action sequence reproduces bit-for-bit identical frames, regardless of what seed the replay env was reset with.
+
+**After training**, reconstruct the videos:
+
+```bash
+python scripts/render_overlay_videos.py videos/ALE/MontezumaRevenge-v5__rnd__1__<timestamp>
+python scripts/render_overlay_videos.py videos/ALE/MontezumaRevenge-v5__rnd__1__<timestamp> --episode 300
+```
+
+This restores each logged episode's state into a fresh env, replays the logged actions while calling `render()`, then draws the bar meter / dashboard and encodes both mp4s exactly as before — just off the training critical path, any time after (or even during, for already-flushed episodes) the run. Can be re-run at will since it's pure replay; nothing about it is destructive to the logs.
 
 ## Log Analysis
 

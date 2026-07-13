@@ -282,11 +282,11 @@ def train():
                   overlay_video=args.overlay_video) for i in range(args.num_envs)]
     )
 
-    overlay_recorder = None
+    overlay_logger = None
     if args.overlay_video:
-        from agents.video_overlay import EpisodeOverlayRecorder
-        overlay_recorder = EpisodeOverlayRecorder(
-            args.videos_dir, run_name,
+        from agents.video_overlay import EpisodeOverlayLogger
+        overlay_logger = EpisodeOverlayLogger(
+            args.videos_dir, run_name, args.env_id,
             metric_names=["raw_intrinsic", "normalized_intrinsic", "obs_rms_std", "reward_rms_std"],
             main_metric="normalized_intrinsic",
             episode_trigger=lambda ep, n=args.overlay_episode_interval: ep % n == 0,
@@ -367,7 +367,10 @@ def train():
             act_buf[step]  = action
             logp_buf[step] = logprob
 
-            next_obs_np, reward, terminated, truncated, infos = envs.step(action.cpu().numpy())
+            action_np = action.cpu().numpy()
+            if overlay_logger is not None:
+                overlay_logger.before_step(envs)
+            next_obs_np, reward, terminated, truncated, infos = envs.step(action_np)
             next_done_np = np.logical_or(terminated, truncated)
             rew_buf[step] = torch.tensor(reward, dtype=torch.float32, device=device)
             next_obs  = torch.tensor(next_obs_np, dtype=torch.float32, device=device)
@@ -380,19 +383,24 @@ def train():
                 pred, tgt = rnd_model(rnd_obs)
                 intr_buf[step] = ((tgt - pred).pow(2).sum(1) / 2).flatten()
 
-            if overlay_recorder is not None:
-                raw0 = float(intr_buf[step, 0].item())
-                # live snapshot of reward_rms.var (≤num_steps stale) — the true
-                # normalized value isn't known until this iteration's post-hoc
-                # normalization below runs, so this is an approximation for video only
-                normalized0 = raw0 / float(np.sqrt(reward_rms.var))
-                metrics0 = {
-                    "raw_intrinsic": raw0,
-                    "normalized_intrinsic": normalized0,
-                    "obs_rms_std": float(np.sqrt(obs_rms.var.mean())),
-                    "reward_rms_std": float(np.sqrt(reward_rms.var)),
-                }
-                overlay_recorder.capture_step(envs, metrics0, bool(terminated[0]), bool(truncated[0]))
+            if overlay_logger is not None:
+                if overlay_logger.is_recording:
+                    # .item() forces a GPU sync -- only paid during the throttled
+                    # recording window, not every step of the whole run
+                    raw0 = float(intr_buf[step, 0].item())
+                    # live snapshot of reward_rms.var (≤num_steps stale) — the true
+                    # normalized value isn't known until this iteration's post-hoc
+                    # normalization below runs, so this is an approximation for video only
+                    normalized0 = raw0 / float(np.sqrt(reward_rms.var))
+                    metrics0 = {
+                        "raw_intrinsic": raw0,
+                        "normalized_intrinsic": normalized0,
+                        "obs_rms_std": float(np.sqrt(obs_rms.var.mean())),
+                        "reward_rms_std": float(np.sqrt(reward_rms.var)),
+                    }
+                else:
+                    metrics0 = {}
+                overlay_logger.after_step(int(action_np[0]), metrics0, bool(terminated[0]), bool(truncated[0]))
 
             if "_episode" in infos:
                 for i, ended in enumerate(infos["_episode"]):

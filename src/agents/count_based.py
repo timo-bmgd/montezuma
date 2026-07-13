@@ -199,11 +199,11 @@ def train():
          for i in range(args.num_envs)]
     )
 
-    overlay_recorder = None
+    overlay_logger = None
     if args.overlay_video:
-        from agents.video_overlay import EpisodeOverlayRecorder
-        overlay_recorder = EpisodeOverlayRecorder(
-            args.videos_dir, run_name,
+        from agents.video_overlay import EpisodeOverlayLogger
+        overlay_logger = EpisodeOverlayLogger(
+            args.videos_dir, run_name, args.env_id,
             metric_names=["raw_count", "applied_bonus", "unique_states"],
             main_metric="applied_bonus",
             episode_trigger=lambda ep, n=args.overlay_episode_interval: ep % n == 0,
@@ -256,7 +256,10 @@ def train():
             act_buf[step]  = action
             logp_buf[step] = logprob
 
-            next_obs_np, reward, terminated, truncated, infos = envs.step(action.cpu().numpy())
+            action_np = action.cpu().numpy()
+            if overlay_logger is not None:
+                overlay_logger.before_step(envs)
+            next_obs_np, reward, terminated, truncated, infos = envs.step(action_np)
             next_done_np = np.logical_or(terminated, truncated)
 
             # count-based intrinsic reward: increment counter, then compute bonus
@@ -274,13 +277,13 @@ def train():
             next_obs  = torch.tensor(next_obs_np, dtype=torch.float32, device=device)
             next_done = torch.tensor(next_done_np, dtype=torch.float32, device=device)
 
-            if overlay_recorder is not None:
+            if overlay_logger is not None:
                 metrics0 = {
                     "raw_count": float(raw_count0),
                     "applied_bonus": float(intrinsic[0]),
                     "unique_states": float(counter.num_unique),
-                }
-                overlay_recorder.capture_step(envs, metrics0, bool(terminated[0]), bool(truncated[0]))
+                } if overlay_logger.is_recording else {}
+                overlay_logger.after_step(int(action_np[0]), metrics0, bool(terminated[0]), bool(truncated[0]))
 
             if "_episode" in infos:
                 for i, ended in enumerate(infos["_episode"]):
