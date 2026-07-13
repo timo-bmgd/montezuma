@@ -44,7 +44,8 @@ def parse_args():
     p.add_argument("--wandb-project", default="montezuma-thesis")
     p.add_argument("--capture-video", action="store_true")
     p.add_argument("--record-room-discovery", action="store_true",
-                   help="Record video only when agent sets a new room high-water mark")
+                   help="In addition to periodic recording, also record video whenever "
+                        "agent sets a new room high-water mark")
     p.add_argument("--video-episode-interval", type=int, default=100,
                    help="Record a video every N episodes (env 0 only, when --capture-video is set)")
     p.add_argument("--clip-reward", action=argparse.BooleanOptionalAction, default=True,
