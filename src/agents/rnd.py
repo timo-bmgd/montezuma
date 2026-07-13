@@ -65,7 +65,10 @@ def parse_args():
     p.add_argument("--num-minibatches", type=int, default=4)
     p.add_argument("--update-epochs", type=int, default=4)
     p.add_argument("--clip-coef", type=float, default=0.1)
-    p.add_argument("--ent-coef", type=float, default=0.001)
+    p.add_argument("--ent-coef", type=float, default=0.01,
+                   help="Raised 10x from original 0.001 on 2026-07-13 after diagnosing an "
+                        "entropy-collapse/intrinsic-collapse feedback loop in the 10M-step "
+                        "production runs (both seeds froze in room 1); see doc/decisions.md")
     p.add_argument("--vf-coef", type=float, default=0.5)
     p.add_argument("--max-grad-norm", type=float, default=0.5)
     # rnd
