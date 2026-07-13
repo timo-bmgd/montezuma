@@ -152,11 +152,12 @@ def make_env(
         if clip_reward:
             env = ClipReward(env, -1, 1)
         if capture_video and idx == 0:
+            # Stacked, not either/or: room-discovery mode adds sparse "new room" videos
+            # on top of (not instead of) periodic sampling, so a production run gets both.
             if record_room_discovery:
                 env = NewRoomRecorder(env, f"{videos_dir}/{run_name}/room_discovery")
-            else:
-                trigger = lambda ep, n=video_episode_interval: ep % n == 0
-                env = RecordVideo(env, f"{videos_dir}/{run_name}", episode_trigger=trigger, disable_logger=True)
+            trigger = lambda ep, n=video_episode_interval: ep % n == 0
+            env = RecordVideo(env, f"{videos_dir}/{run_name}", episode_trigger=trigger, disable_logger=True)
         return env
 
     return thunk

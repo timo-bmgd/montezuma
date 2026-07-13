@@ -39,6 +39,10 @@ def parse_args():
     p.add_argument("--track", action="store_true")
     p.add_argument("--wandb-project", default="montezuma-thesis")
     p.add_argument("--capture-video", action="store_true")
+    p.add_argument("--record-room-discovery", action="store_true",
+                   help="Record video only when agent sets a new room high-water mark")
+    p.add_argument("--video-episode-interval", type=int, default=100,
+                   help="Record a video every N episodes (env 0 only, when --capture-video is set)")
     p.add_argument("--clip-reward", action=argparse.BooleanOptionalAction, default=True,
                    help="Clip extrinsic reward to [-1, 1] (standard Atari preprocessing)")
     # env
@@ -182,7 +186,8 @@ def train():
 
     VecCls = gym.vector.SyncVectorEnv if args.sync_envs else gym.vector.AsyncVectorEnv
     envs = VecCls(
-        [make_env(args.env_id, i, args.capture_video, run_name, args.videos_dir, clip_reward=args.clip_reward)
+        [make_env(args.env_id, i, args.capture_video, run_name, args.videos_dir, args.video_episode_interval,
+                  args.record_room_discovery, clip_reward=args.clip_reward)
          for i in range(args.num_envs)]
     )
 

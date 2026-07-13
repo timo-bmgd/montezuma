@@ -31,6 +31,8 @@ python src/agents/count_based.py \
     --total-timesteps 10000000 \
     --num-envs 32 \
     --seed "${SEED:-1}" \
+    --capture-video \
+    --record-room-discovery \
     --track \
     --wandb-project montezuma-thesis \
     --runs-dir "$SCRATCH/runs" \
