@@ -1,13 +1,21 @@
 """Synced gameplay + metrics-dashboard video pairs for a single training run.
 
 For a triggered episode, produces two video files of identical length/timing:
-  - gameplay_ep<N>.mp4  — rendered gameplay with one "main" metric burned in as text
+  - gameplay_ep<N>.mp4  — rendered gameplay with a thin vertical bar meter for
+    the "main" metric on the right edge of the frame
   - dashboard_ep<N>.mp4 — a scrolling line plot of several metrics, frame-synced
     to the gameplay video
 
 Env 0 must be constructed via base.make_env(..., overlay_video=True), which
 attaches OverlayFrameProbe to every sub-env so envs.call("overlay_render")
 is safe to invoke regardless of AsyncVectorEnv vs SyncVectorEnv.
+
+The gameplay bar meter uses a *fixed* min/max per agent (passed in as
+main_metric_range), not a per-episode autoscale like the dashboard's y-axis.
+This is deliberate: autoscaling would make the bar always look "half full"
+regardless of the metric's actual magnitude, hiding exactly the kind of
+collapse (e.g. RND's intrinsic reward shrinking 20x over training) that the
+bar is meant to make visible at a glance across many recorded episodes.
 """
 
 import pathlib
@@ -20,6 +28,35 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 
+def _draw_bar_meter(img, value, vmin, vmax, label="r"):
+    """Draws a thin vertical fill bar against the right edge of img (mutates and returns it).
+
+    Fill height is (value - vmin) / (vmax - vmin), clamped to [0, 1] so out-of-range
+    spikes pin the bar at empty/full rather than distorting the scale. vmin/vmax are
+    fixed, metric-specific bounds chosen by the caller (see rnd.py/count_based.py),
+    not derived from the data being drawn.
+    """
+    W, H = img.size
+    bar_w = max(4, round(W * 0.05))
+    label_h = 9
+    pad = 2
+    x1, x0 = W - pad, W - pad - bar_w
+    y0, y1 = pad, H - pad - label_h
+
+    frac = 0.0 if vmax <= vmin else (value - vmin) / (vmax - vmin)
+    frac = min(1.0, max(0.0, frac))
+    fill_top = y1 - frac * (y1 - y0)
+
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([x0, y0, x1, y1], outline=(255, 255, 255), width=1)
+    if frac > 0:
+        draw.rectangle([x0 + 1, fill_top, x1 - 1, y1 - 1], fill=(255, 200, 0))
+    font = ImageFont.load_default(size=label_h)
+    draw.text((x0, y1 + 1), label, fill=(255, 255, 255), font=font,
+              stroke_width=1, stroke_fill=(0, 0, 0))
+    return img
+
+
 class EpisodeOverlayRecorder:
     """Buffers env-0 frames and per-step metrics for triggered episodes.
 
@@ -27,11 +64,13 @@ class EpisodeOverlayRecorder:
     every training step (it internally gates itself via episode_trigger).
     """
 
-    def __init__(self, videos_dir, run_name, metric_names, main_metric, episode_trigger, fps=30):
+    def __init__(self, videos_dir, run_name, metric_names, main_metric, episode_trigger,
+                 main_metric_range, fps=30):
         self._folder = pathlib.Path(videos_dir) / run_name / "overlay"
         self._folder.mkdir(parents=True, exist_ok=True)
         self._metric_names = list(metric_names)
         self._main_metric = main_metric
+        self._main_metric_range = main_metric_range
         self._episode_trigger = episode_trigger
         self._fps = fps
 
@@ -64,17 +103,12 @@ class EpisodeOverlayRecorder:
         self._write_dashboard(imageio)
 
     def _write_gameplay(self, imageio):
-        font = ImageFont.load_default(size=14)
         main_vals = self._metrics[self._main_metric]
-        out = []
-        for frame, val in zip(self._frames, main_vals):
-            img = Image.fromarray(frame)
-            draw = ImageDraw.Draw(img)
-            draw.text(
-                (4, 4), f"{self._main_metric}={val:.4f}",
-                fill=(255, 255, 0), font=font, stroke_width=1, stroke_fill=(0, 0, 0),
-            )
-            out.append(np.asarray(img))
+        vmin, vmax = self._main_metric_range
+        out = [
+            np.asarray(_draw_bar_meter(Image.fromarray(frame), val, vmin, vmax))
+            for frame, val in zip(self._frames, main_vals)
+        ]
         path = self._folder / f"gameplay_ep{self._ep:05d}.mp4"
         imageio.mimwrite(str(path), out, fps=self._fps)
 

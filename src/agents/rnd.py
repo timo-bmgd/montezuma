@@ -286,6 +286,14 @@ def train():
             metric_names=["raw_intrinsic", "normalized_intrinsic", "obs_rms_std", "reward_rms_std"],
             main_metric="normalized_intrinsic",
             episode_trigger=lambda ep, n=args.overlay_episode_interval: ep % n == 0,
+            # normalized_intrinsic can't go below 0 (it's a normalized squared
+            # prediction error). Upper bound of 0.3 gives headroom above the highest
+            # healthy value observed in the 10M-step production runs (~0.217 early in
+            # training, collapsing to ~0.009 as the RND predictor saturated). A bar
+            # that consistently sits near-empty across a run's recorded episodes is
+            # the same collapse signature, made visible at a glance instead of
+            # requiring a TensorBoard pull.
+            main_metric_range=(0.0, 0.3),
         )
 
     agent = Agent(envs).to(device)

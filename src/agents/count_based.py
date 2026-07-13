@@ -201,6 +201,10 @@ def train():
             metric_names=["raw_count", "applied_bonus", "unique_states"],
             main_metric="applied_bonus",
             episode_trigger=lambda ep, n=args.overlay_episode_interval: ep % n == 0,
+            # bonus = exploration_coef / sqrt(n); n >= 1 always, so exploration_coef
+            # at n=1 (brand-new state) is the theoretical ceiling, decaying toward 0
+            # as a state gets revisited more.
+            main_metric_range=(0.0, args.exploration_coef),
         )
 
     agent = Agent(envs).to(device)
