@@ -48,6 +48,10 @@ def parse_args():
                         "agent sets a new room high-water mark")
     p.add_argument("--video-episode-interval", type=int, default=100,
                    help="Record a video every N episodes (env 0 only, when --capture-video is set)")
+    p.add_argument("--overlay-video", action="store_true",
+                   help="Record synced gameplay+dashboard overlay videos (env 0 only)")
+    p.add_argument("--overlay-episode-interval", type=int, default=100,
+                   help="Record overlay video pair every N episodes when --overlay-video is set")
     p.add_argument("--clip-reward", action=argparse.BooleanOptionalAction, default=True,
                    help="Clip extrinsic reward to [-1, 1] (standard Atari preprocessing)")
     # env
@@ -246,6 +250,8 @@ def _normalize_obs(obs_np, obs_rms, device):
 
 def train():
     args = parse_args()
+    if args.overlay_video and args.capture_video:
+        raise SystemExit("--overlay-video and --capture-video are mutually exclusive in this first version")
 
     batch_size = args.num_envs * args.num_steps
     minibatch_size = batch_size // args.num_minibatches
@@ -272,8 +278,27 @@ def train():
     VecCls = gym.vector.SyncVectorEnv if args.sync_envs else gym.vector.AsyncVectorEnv
     envs = VecCls(
         [make_env(args.env_id, i, args.capture_video, run_name, args.videos_dir, args.video_episode_interval,
-                  args.record_room_discovery, clip_reward=args.clip_reward) for i in range(args.num_envs)]
+                  args.record_room_discovery, clip_reward=args.clip_reward,
+                  overlay_video=args.overlay_video) for i in range(args.num_envs)]
     )
+
+    overlay_recorder = None
+    if args.overlay_video:
+        from agents.video_overlay import EpisodeOverlayRecorder
+        overlay_recorder = EpisodeOverlayRecorder(
+            args.videos_dir, run_name,
+            metric_names=["raw_intrinsic", "normalized_intrinsic", "obs_rms_std", "reward_rms_std"],
+            main_metric="normalized_intrinsic",
+            episode_trigger=lambda ep, n=args.overlay_episode_interval: ep % n == 0,
+            # normalized_intrinsic can't go below 0 (it's a normalized squared
+            # prediction error). Upper bound of 0.3 gives headroom above the highest
+            # healthy value observed in the 10M-step production runs (~0.217 early in
+            # training, collapsing to ~0.009 as the RND predictor saturated). A bar
+            # that consistently sits near-empty across a run's recorded episodes is
+            # the same collapse signature, made visible at a glance instead of
+            # requiring a TensorBoard pull.
+            main_metric_range=(0.0, 0.3),
+        )
 
     agent = Agent(envs).to(device)
     rnd_model = RNDModel().to(device)
@@ -354,6 +379,20 @@ def train():
             with torch.no_grad():
                 pred, tgt = rnd_model(rnd_obs)
                 intr_buf[step] = ((tgt - pred).pow(2).sum(1) / 2).flatten()
+
+            if overlay_recorder is not None:
+                raw0 = float(intr_buf[step, 0].item())
+                # live snapshot of reward_rms.var (≤num_steps stale) — the true
+                # normalized value isn't known until this iteration's post-hoc
+                # normalization below runs, so this is an approximation for video only
+                normalized0 = raw0 / float(np.sqrt(reward_rms.var))
+                metrics0 = {
+                    "raw_intrinsic": raw0,
+                    "normalized_intrinsic": normalized0,
+                    "obs_rms_std": float(np.sqrt(obs_rms.var.mean())),
+                    "reward_rms_std": float(np.sqrt(reward_rms.var)),
+                }
+                overlay_recorder.capture_step(envs, metrics0, bool(terminated[0]), bool(truncated[0]))
 
             if "_episode" in infos:
                 for i, ended in enumerate(infos["_episode"]):
