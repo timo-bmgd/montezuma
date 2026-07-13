@@ -122,6 +122,63 @@ env = RecordVideo(
 
 See `examples/recording_sample.py` for a working CartPole example of this pattern.
 
+## Video Recording — Room Discovery Mode
+
+`NewRoomRecorder` in `base.py` buffers `rgb_array` frames in memory during each episode. On episode end it checks `info["rooms_visited"]`; if the count exceeds the stored high-water mark it writes an `.mp4` and updates the mark, otherwise discards the buffer. Requires `render_mode="rgb_array"` and `RoomTracker` in the wrapper stack.
+
+Enable with `--capture-video --record-room-discovery`. Videos land in `videos/<run_name>/room_discovery/new_room_ep<N>_r<R>.mp4`.
+
+Standard periodic recording uses `--capture-video --video-episode-interval N` (default 100). Supported by both `rnd.py` and `count_based.py`. `--record-room-discovery` stacks on top of periodic recording (both write to the same run's video folder) rather than replacing it — a single run with both flags produces `rl-video-episode-N.mp4` files and `room_discovery/new_room_ep*.mp4` files together.
+
+## Log Analysis
+
+**Text logs** (`logs/<name>.out`) — plain stdout/stderr. Contains per-episode return/length lines and per-iteration SPS prints. Readable directly.
+
+**TensorBoard event files** (`runs/<run_name>/events.out.tfevents.*`) — binary protobuf. Parse with:
+
+```python
+from torch.utils.tensorboard.backend.event_file_loader import EventFileLoader
+# or, easier:
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
+ea = EventAccumulator("runs/<run_name>")
+ea.Reload()
+scalars = ea.Tags()["scalars"]          # list of available metric names
+steps, vals = zip(*[(e.step, e.value) for e in ea.Scalars("charts/episodic_return")])
+```
+
+**Key metrics to check when diagnosing a failed RND run:**
+
+| Metric | Healthy sign | Failure sign |
+|--------|-------------|--------------|
+| `charts/episodic_return` | Increasing trend | Flat at 0 forever |
+| `losses/entropy` | Slow decay | Rapid collapse to ~0 |
+| `charts/raw_intrinsic_rew_mean` | Non-zero, ~0.1–1.0 | Near zero throughout |
+| `charts/obs_rms_std` | Converges to ~1.0 | Stays near 0 |
+| `charts/reward_rms_std` | Non-zero | Near zero |
+| `losses/explained_variance` | Grows toward 1.0 | Stays negative/zero |
+
+**Production run data locations (local):**
+- Logs: `logs/rnd_10m_s1.out`, `logs/rnd_10m_s2.out`, `logs/ppo_5m_s1.out`
+- TensorBoard: `runs/ALE/MontezumaRevenge-v5__rnd__1__1781212716/`, `...__rnd__1__1781213250/`
+
+## JupyterHub Launch Pattern
+
+On JupyterHub, use `sys.executable` in `subprocess.Popen` — the kernel Python has all packages; the system Python does not. GPU assignment uses `CUDA_VISIBLE_DEVICES` env var:
+
+```python
+def launch(args, log_name, gpu=0):
+    env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu)}
+    proc = subprocess.Popen(
+        [sys.executable, *args],
+        stdout=open(PROJECT / "logs" / log_name, "w"), stderr=subprocess.STDOUT,
+        cwd=PROJECT, env=env,
+    )
+    return proc
+```
+
+The notebook `training-runs.ipynb` contains ready-to-run cells for all production runs.
+
 ## Evaluation Metrics
 
 Based on literature, report both:
