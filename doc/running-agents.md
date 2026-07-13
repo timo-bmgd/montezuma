@@ -114,9 +114,20 @@ python src/agents/rnd.py --obs-norm-init-steps 5 --total-timesteps 75000
 
 ## Performance Expectations on CPU (macOS)
 
-| Agents | SPS | 10M steps takes |
-|--------|-----|----------------|
-| 4 envs | ~130 | ~21 hours |
-| 8 envs | ~130 | ~21 hours |
+Measured via `scripts/profile_throughput.py` (see `doc/throughput-investigation.md`
+for the full methodology and cluster-side numbers):
 
-SPS doesn't scale linearly with `--num-envs` on CPU because `SyncVectorEnv` is single-threaded. For real training runs, use a GPU machine or a cloud instance. The 10M-step runs logged in `runs/` reflect CPU baseline numbers.
+| Phase | num_envs=4 | Notes |
+|-------|-----------|-------|
+| Env-only (random actions) | ~4365 SPS | Emulation + wrapper stack, no NN |
+| Full step, inference only | ~1772 SPS | + NatureCNN forward pass |
+| Full step + backward | ~760 SPS | + backward/optimizer step every 128 steps |
+
+The full training loop (forward + backward, matching `ppo.py`/`rnd.py`) runs at
+roughly **~760 SPS** on CPU with 4 envs — NN compute dominates on CPU-only hardware,
+unlike on a GPU where the bottleneck shifts back toward emulation/IPC overhead (see
+`doc/throughput-investigation.md` §3). The default vectorization backend is
+`AsyncVectorEnv` (one subprocess per env), not `SyncVectorEnv` — pass `--sync-envs`
+to opt into the single-process alternative, which is easier to debug but doesn't
+parallelize env stepping across CPU cores. For real training runs, use a GPU machine
+or a cloud instance; local CPU runs are for quick smoke tests only.
