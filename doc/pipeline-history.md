@@ -84,7 +84,7 @@ locality-sensitive-hash count-based exploration (average the 4-frame stack, down
 pixels, L2-normalize, project through a fixed random Gaussian matrix to a sign-bit hash, count
 visits per bucket; bonus `= beta / sqrt(count)`) — the general approach of Tang et al. (2017,
 *#Exploration: A Study of Count-Based Exploration for Deep Reinforcement Learning*,
-[arXiv:1703.01310](https://arxiv.org/abs/1703.01310)), though the code does not cite this paper
+[arXiv:1611.04717](https://arxiv.org/abs/1611.04717)), though the code does not cite this paper
 inline (CLAUDE.md's literature-benchmark table does, listing it alongside RND and Go-Explore). The
 class docstring is explicit about the *purpose* of this baseline in the thesis: it *"Demonstrates
 that naive visit-counting fails on hard-exploration games: the state space is so large that nearly
@@ -425,7 +425,7 @@ explicit about:
   `src/agents/rnd.py` and `src/agents/base.py` (reward-clipping preprocessing, Appendix A.3).
 - Tang, H., Houthooft, R., Foote, D., Stooke, A., Chen, X., Duan, Y., Schulman, J., De Turck, F., &
   Abbeel, P. (2017). *#Exploration: A Study of Count-Based Exploration for Deep Reinforcement
-  Learning.* [arXiv:1703.01310](https://arxiv.org/abs/1703.01310). Motivates the SimHash approach
+  Learning.* [arXiv:1611.04717](https://arxiv.org/abs/1611.04717). Motivates the SimHash approach
   implemented in `src/agents/count_based.py`; cited in `CLAUDE.md`'s literature-benchmark table but
   not inline in the code itself.
 - Ecoffet, A., Huizinga, J., Lehman, J., Stanley, K. O., & Clune, J. (2019). *Go-Explore: a New
