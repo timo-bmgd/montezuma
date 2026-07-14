@@ -19,6 +19,7 @@ import sys
 import argparse
 import random
 import time
+from pathlib import Path
 
 import gymnasium as gym
 import numpy as np
@@ -70,10 +71,10 @@ def parse_args():
     p.add_argument("--num-minibatches", type=int, default=4)
     p.add_argument("--update-epochs", type=int, default=4)
     p.add_argument("--clip-coef", type=float, default=0.1)
-    p.add_argument("--ent-coef", type=float, default=0.01,
-                   help="Raised 10x from original 0.001 on 2026-07-13 after diagnosing an "
-                        "entropy-collapse/intrinsic-collapse feedback loop in the 10M-step "
-                        "production runs (both seeds froze in room 1); see doc/decisions.md")
+    p.add_argument("--ent-coef", type=float, default=0.001,
+                   help="Matches the RND paper's published Atari value (Burda et al. 2018); "
+                        "see doc/decisions.md -- a 2026-07-13 10x bump was discredited "
+                        "same-day and reverted 2026-07-14")
     p.add_argument("--vf-coef", type=float, default=0.5)
     p.add_argument("--max-grad-norm", type=float, default=0.5)
     # rnd
@@ -94,6 +95,25 @@ def parse_args():
     p.add_argument("--checkpoint-interval", type=int, default=100,
                    help="Save a checkpoint every N iterations")
     p.add_argument("--resume", default=None, help="Path to checkpoint .pt file to resume from")
+    # collapse auto-stop
+    p.add_argument("--auto-stop", action=argparse.BooleanOptionalAction, default=True,
+                   help="Stop training early if a collapse signature (entropy collapse + "
+                        "intrinsic-reward collapse + frozen PPO updates, sustained together) is "
+                        "detected; see doc/10M-RND-run-failure-documentation.md for the failure "
+                        "mode this guards against. Writes a checkpoint and exits with code 42 "
+                        "on trigger, to avoid burning the rest of the walltime budget on a run "
+                        "that has already stopped learning.")
+    p.add_argument("--auto-stop-patience", type=int, default=100,
+                   help="Consecutive iterations the collapse signature must hold before stopping")
+    p.add_argument("--auto-stop-entropy-frac", type=float, default=0.15,
+                   help="Trigger threshold: entropy / ln(action_space_n) below this value")
+    p.add_argument("--auto-stop-intrinsic-drop", type=float, default=10.0,
+                   help="Trigger threshold: raw_intrinsic_rew_mean down by at least this factor "
+                        "from its running peak so far this run")
+    p.add_argument("--auto-stop-kl-eps", type=float, default=1e-3,
+                   help="Trigger threshold: approx_kl below this value (near-zero PPO updates)")
+    p.add_argument("--auto-stop-clipfrac-eps", type=float, default=0.01,
+                   help="Trigger threshold: clipfrac below this value (near-zero PPO updates)")
     return p.parse_args()
 
 
@@ -256,7 +276,18 @@ def train():
     batch_size = args.num_envs * args.num_steps
     minibatch_size = batch_size // args.num_minibatches
     num_iterations = args.total_timesteps // batch_size
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+    if args.resume:
+        # Recover the original run_name from the checkpoint path
+        # ({checkpoint_dir}/{run_name}/ckpt_XXXXXX.pt) so a resumed run continues
+        # writing to the same TensorBoard/W&B run instead of fragmenting into a
+        # fresh timestamped directory every time a walltime-limited job requeues.
+        # run_name itself can contain "/" (env_id is e.g. "ALE/MontezumaRevenge-v5"),
+        # so this must be relative to checkpoint_dir, not just the immediate parent.
+        run_name = str(Path(args.resume).resolve().parent.relative_to(
+            Path(args.checkpoint_dir).resolve()
+        ))
+    else:
+        run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
 
     if args.track:
         import wandb
@@ -348,6 +379,10 @@ def train():
     next_obs  = torch.tensor(next_obs_np, dtype=torch.float32, device=device)
     next_done = torch.zeros(args.num_envs, device=device)
     start_time = time.time()
+
+    collapse_streak = 0
+    raw_intrinsic_peak = 0.0
+    action_space_n = envs.single_action_space.n
 
     for iteration in range(start_iteration, num_iterations + 1):
         if args.anneal_lr:
@@ -535,6 +570,35 @@ def train():
         writer.add_scalar("losses/clipfrac",                np.mean(clipfracs),                      global_step)
         writer.add_scalar("losses/fwd_loss",                fwd_loss.item(),                         global_step)
         writer.add_scalar("losses/explained_variance",      explained_var,                           global_step)
+
+        if args.auto_stop:
+            raw_intrinsic_mean = float(curiosity_np.mean())
+            raw_intrinsic_peak = max(raw_intrinsic_peak, raw_intrinsic_mean)
+            entropy_frac = entropy.mean().item() / np.log(action_space_n)
+            intrinsic_drop = raw_intrinsic_peak / max(raw_intrinsic_mean, 1e-8)
+            collapsed_now = (
+                entropy_frac < args.auto_stop_entropy_frac
+                and intrinsic_drop >= args.auto_stop_intrinsic_drop
+                and approx_kl.item() < args.auto_stop_kl_eps
+                and np.mean(clipfracs) < args.auto_stop_clipfrac_eps
+            )
+            collapse_streak = collapse_streak + 1 if collapsed_now else 0
+            writer.add_scalar("charts/collapse_streak", collapse_streak, global_step)
+
+            if collapse_streak >= args.auto_stop_patience:
+                print(f"AUTO-STOP: collapse signature sustained for {args.auto_stop_patience} "
+                      f"iterations (entropy_frac={entropy_frac:.3f}, "
+                      f"intrinsic_drop={intrinsic_drop:.1f}x, approx_kl={approx_kl.item():.5f}, "
+                      f"clipfrac={np.mean(clipfracs):.4f}). Saving checkpoint and exiting.")
+                writer.add_scalar("charts/auto_stop_triggered", 1, global_step)
+                ckpt_path = os.path.join(args.checkpoint_dir, run_name,
+                                         f"ckpt_{iteration:06d}_autostop.pt")
+                _save_checkpoint(ckpt_path, iteration, global_step,
+                                 agent, rnd_model, optimizer,
+                                 obs_rms, reward_rms, reward_filter, args)
+                envs.close()
+                writer.close()
+                sys.exit(42)
 
         if iteration % args.checkpoint_interval == 0 or iteration == num_iterations:
             ckpt_path = os.path.join(args.checkpoint_dir, run_name, f"ckpt_{iteration:06d}.pt")

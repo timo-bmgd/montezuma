@@ -181,7 +181,7 @@ it, and confirm it doesn't have some other interaction with `RecordEpisodeStatis
      | Variant | `ent_coef` | autoreset fix | Expected if §3 is the cause | Expected if §4.2's "just needs more updates" theory is right |
      |---|---|---|---|---|
      | A | 0.001 (paper value) | no | reproduces original collapse | reproduces original collapse |
-     | B | 0.01 (current `main` default) | no | still collapses (bug independent of `ent_coef`) | may partially help |
+     | B | 0.01 (reverted as `main` default 2026-07-14; still a valid ablation variant — see `doc/decisions.md`) | no | still collapses (bug independent of `ent_coef`) | may partially help |
      | C | 0.001 | yes | recovers toward PPO-level performance | still underperforms PPO |
      | D | 0.01 | yes | best of both | best of both, still may lag PPO |
    - Pass/fail should be stated in terms of §2's numbers: does the variant reach at
