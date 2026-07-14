@@ -141,3 +141,70 @@ single (expensive, slurm-queued) run — resubmitting a run just to get the
 other recording mode would waste GPU-hours. Verified via local smoke test that
 a single run now produces both `rl-video-episode-N.mp4` and
 `room_discovery/new_room_ep*.mp4` files.
+
+---
+
+## 2026-07-14 — `--resume` run_name fix, and collapse auto-stop added
+
+**Change 1 — `--resume` run_name fragmentation fixed:** `rnd.py`/`ppo.py`
+previously computed `run_name = f"{env_id}__{exp_name}__{seed}__{int(time.time())}"`
+unconditionally, so every `--resume <ckpt>` invocation started a *new*
+timestamped TensorBoard/W&B/checkpoint directory instead of continuing the
+original run. Now, when `--resume` is passed, `run_name` is recovered from
+the checkpoint's own path instead: `checkpoints/<run_name>/ckpt_XXXXXX.pt`
+makes `run_name` recoverable as the checkpoint's parent directory, relative
+to `--checkpoint-dir`. Note this needed `Path(...).relative_to(checkpoint_dir)`,
+not just `.parent.name` — `run_name` itself contains `/` (`env_id` is
+`ALE/MontezumaRevenge-v5`), so `.parent.name` alone silently drops the `ALE/`
+segment and reintroduces the exact same fragmentation bug under a different
+name. Caught via local `--sync-envs` verification before this was believed
+fixed — see commit history for the two-step fix.
+
+**Why it matters for the HPC rollout:** every production script now supports
+`--resume $SCRATCH/checkpoints/<run_name>/ckpt_XXXXXX.pt` (see
+`slurm/run_rnd.slurm`, `slurm/run_ppo.slurm`) as the intended way to extend a
+walltime-truncated or intentionally-modest run into a longer one without
+starting over. Without this fix, every chained resume would have fragmented
+into a new run directory, breaking exactly that workflow.
+
+**Change 2 — collapse auto-stop added:** Both `rnd.py` and `ppo.py` now
+support `--auto-stop`/`--no-auto-stop` (default **on**): if a collapse
+signature is sustained for `--auto-stop-patience` consecutive iterations, the
+run logs a marker, writes a checkpoint, and exits with code `42` (distinct
+from a normal `0` completion or a crash's nonzero code).
+
+- `rnd.py`'s signature combines three conditions, matched directly to the
+  diagnosis in `doc/10M-RND-run-failure-documentation.md`: entropy fraction
+  (`entropy / ln(action_space_n)`) below `--auto-stop-entropy-frac` (default
+  0.15), `raw_intrinsic_rew_mean` down at least `--auto-stop-intrinsic-drop`
+  (default 10x) from its running peak this run, and both `approx_kl` and
+  `clipfrac` below near-zero epsilons (`--auto-stop-kl-eps`,
+  `--auto-stop-clipfrac-eps`) — i.e. PPO updates have become no-ops. All
+  three together, not any single metric alone, since each one individually
+  can dip transiently without a real collapse in progress.
+- `ppo.py`'s signature is simpler (entropy fraction + near-zero
+  `approx_kl`/`clipfrac` only — no intrinsic-reward term, since PPO has none)
+  and its default thresholds (`--auto-stop-entropy-frac 0.10`,
+  `--auto-stop-patience 150`) are **provisional** — PPO has no prior collapse
+  incident on this codebase to calibrate against, unlike RND's thresholds.
+  Re-check after the first production `run_ppo.slurm` run whether they fired
+  correctly (a real collapse) or too eagerly (should be loosened).
+
+**Why:** the prior 10M-step RND runs burned ~91% of their walltime budget
+after collapsing in the first ~9% — see
+`doc/10M-RND-run-failure-documentation.md`. With `slurm/run_rnd.slurm` now
+intentionally scoped as a modest, checkpoint-chainable validation run rather
+than a single large speculative commitment (see that script's header), an
+unattended collapse detector matters more, not less: a smaller run that
+silently collapses and keeps going wastes proportionally the same fraction of
+GPU-hours as the 10M-step failure did. Verified locally (`--sync-envs`,
+forced trigger via extreme thresholds) that both agents write a final
+checkpoint and exit `42` cleanly rather than crashing or hanging.
+
+**How to apply / re-evaluate:** `sacct -j <id> --format=ExitCode` distinguishes
+auto-stop (`42:0`) from normal completion (`0:0`) after the fact — see
+`doc/hpc-onboarding.md` §5, §7. An auto-stop firing on `run_rnd.slurm` at
+paper-default hyperparameters would confirm the collapse persists independent
+of `ent_coef`, pointing back at the still-open `AutoresetMode.NEXT_STEP`
+GAE-masking bug (documented above, explicitly out of scope for this round of
+changes) as the next lever, not more compute.
