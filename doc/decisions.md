@@ -68,6 +68,18 @@ missed:
    not what "entropy decayed a bit too fast" predicts. Something in the
    RND-augmented path looks actively harmful, not just insufficiently tuned.
 
+**Follow-up, 2026-07-14 — bump reverted:** `src/agents/rnd.py`'s `--ent-coef`
+default restored to `0.001`. The confidence downgrade above already established
+that `0.001` is the RND paper's own published Atari value (Burda et al. 2018),
+not an under-tuned placeholder, and that RND underperforming a plain PPO
+baseline can't be explained by `ent_coef` alone — so shipping a permanent 10x
+deviation from the paper on the strength of one collapsed run was premature.
+`ent_coef=0.01` remains a legitimate variable in the matched-budget ablation
+proposed in `doc/rnd-vs-ppo-asymmetry-investigation.md` §4.3 (variants B/D) —
+reverting the default doesn't retire the hypothesis, it just stops it from being
+silently on-by-default in production runs (`slurm/run_rnd.slurm`) that don't
+explicitly request it.
+
 **Also found, independently of the above, and not present in either of the
 other worktrees' RND write-ups:** gymnasium 1.3.0's vector envs default to
 `AutoresetMode.NEXT_STEP` (confirmed empirically with a CartPole boundary
