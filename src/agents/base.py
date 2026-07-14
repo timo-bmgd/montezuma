@@ -108,6 +108,25 @@ class NewRoomRecorder(gym.Wrapper):
         imageio.mimwrite(str(path), self._frames, fps=self._fps)
 
 
+class OverlayFrameProbe(gym.Wrapper):
+    """Exposes a uniform overlay_render() method across all vector sub-envs.
+
+    Only the active env (idx 0) actually renders; all others return None
+    without touching self.render(). This lets envs.call("overlay_render") be
+    invoked safely on the whole vector env even though only idx 0 was
+    constructed with render_mode="rgb_array" — calling .render() on an env
+    built with render_mode=None raises, and AsyncVectorEnv/SyncVectorEnv's
+    .call() always dispatches to every sub-env with no per-index targeting.
+    """
+
+    def __init__(self, env: gym.Env, active: bool):
+        super().__init__(env)
+        self._active = active
+
+    def overlay_render(self):
+        return self.render() if self._active else None
+
+
 def make_env(
     env_id: str,
     idx: int,
@@ -117,12 +136,19 @@ def make_env(
     video_episode_interval: int = 1,
     record_room_discovery: bool = False,
     clip_reward: bool = True,
+    overlay_video: bool = False,
 ):
     """Returns a thunk for gym.vector.AsyncVectorEnv (or SyncVectorEnv).
 
     Wrapper stack (inner → outer):
       ALE env → RoomTracker → AtariPreprocessing → FrameStackObservation
-        → RecordEpisodeStatistics → [ClipReward] [→ RecordVideo for idx 0 when capture_video]
+        → RecordEpisodeStatistics → [ClipReward]
+        → [OverlayFrameProbe for idx 0 when overlay_video]
+        → [RecordVideo for idx 0 when capture_video] → [NewRoomRecorder on top when record_room_discovery]
+
+    overlay_video and capture_video are mutually exclusive (enforced by each
+    agent's train() at the CLI level, not here) -- overlay_video takes priority
+    if both are somehow set.
 
     terminal_on_life_loss=False so the agent experiences full episodes —
     important for exploration research where we want to reward reaching new rooms,
@@ -135,7 +161,7 @@ def make_env(
     """
 
     def thunk():
-        render_mode = "rgb_array" if (capture_video and idx == 0) else None
+        render_mode = "rgb_array" if (idx == 0 and (capture_video or overlay_video)) else None
         # frameskip=1 disables ALE's built-in repeat; AtariPreprocessing does the skipping instead
         env = gym.make(env_id, frameskip=1, render_mode=render_mode)
         env = RoomTracker(env)
@@ -151,12 +177,15 @@ def make_env(
         env = RecordEpisodeStatistics(env)
         if clip_reward:
             env = ClipReward(env, -1, 1)
-        if capture_video and idx == 0:
+        if overlay_video:
+            env = OverlayFrameProbe(env, active=(idx == 0))
+        elif capture_video and idx == 0:
+            # Stacked, not either/or: room-discovery mode adds sparse "new room" videos
+            # on top of (not instead of) periodic sampling, so a production run gets both.
             if record_room_discovery:
                 env = NewRoomRecorder(env, f"{videos_dir}/{run_name}/room_discovery")
-            else:
-                trigger = lambda ep, n=video_episode_interval: ep % n == 0
-                env = RecordVideo(env, f"{videos_dir}/{run_name}", episode_trigger=trigger, disable_logger=True)
+            trigger = lambda ep, n=video_episode_interval: ep % n == 0
+            env = RecordVideo(env, f"{videos_dir}/{run_name}", episode_trigger=trigger, disable_logger=True)
         return env
 
     return thunk

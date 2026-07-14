@@ -9,7 +9,7 @@ Bachelor thesis: testing and comparing exploration algorithms for playing and so
 ALE documentation: https://ale.farama.org/
 
 **Algorithm roadmap** (in planned order) — all three are implemented in `src/agents/`:
-1. Count-based exploration (`count_based.py`) — baseline to demonstrate limitations on hard-exploration games
+1. Count-based exploration (`count_based.py`, plus an AE-SimHash variant `count_based_ae.py`) — baseline to demonstrate limitations on hard-exploration games
 2. RND (Random Network Distillation) (`rnd.py`) — key algorithm of interest
 3. PPO (`ppo.py`) — standard policy gradient baseline
 
@@ -21,7 +21,7 @@ Python 3.13, `.venv` virtual environment. The VSCode interpreter is configured t
 source .venv/bin/activate
 ```
 
-No `requirements.txt` — packages are managed directly in the venv. Key packages: `ale_py` (0.11.2), `gymnasium` (1.3.0), `torch` (2.8.0), `numpy`, `agilerl` (2.6.1, installed but not the primary framework going forward).
+`requirements.txt` at the repo root pins the key packages: `torch==2.8.0+cu124`, `gymnasium==1.3.0`, `ale-py==0.11.2`, `AutoROM==0.6.1`, `numpy==2.4.4`, `opencv-python-headless`, `tensorboard`, `wandb`, `pillow`. `agilerl` (2.6.1) is also installed in the venv but not listed in `requirements.txt` and not the primary framework going forward.
 
 **Gymnasium 1.x vectorized env infos format:** gymnasium 1.x changed the infos format from gymnasium 0.x. Episode data is now in `infos["episode"]["r"][i]` / `infos["episode"]["l"][i]`, masked by `infos["_episode"][i]` (True when env `i` ended an episode). The old `infos["final_info"]` list-of-dicts pattern from CleanRL's original code does NOT work in gymnasium 1.x.
 
@@ -46,7 +46,7 @@ env = make_vect_envs("ALE/MontezumaRevenge-v5", num_envs=8)
 
 ## RL Framework
 
-**CleanRL** is the target framework (replacing AgileRL). CleanRL is a single-file RL implementation library — each algorithm lives in one self-contained file, making it easy to understand, modify, and compare. Install with `pip install cleanrl`.
+**CleanRL** is the target framework (replacing AgileRL) — but as a *style*, not a dependency: `src/agents/ppo.py`, `count_based.py`, `count_based_ae.py`, and `rnd.py` are hand-written, self-contained single-file implementations following CleanRL's conventions. The `cleanrl` pip package itself is not installed and not imported anywhere.
 
 AgileRL (with evolutionary HPO) remains installed but is secondary — relevant only if evolutionary hyperparameter search becomes part of the thesis scope later.
 
@@ -73,38 +73,43 @@ source .venv/bin/activate
 python src/agents/ppo.py
 python src/agents/ppo.py --total-timesteps 1000000 --num-envs 4
 
-# RND (Random Network Distillation)
-python src/agents/rnd.py
-python src/agents/rnd.py --total-timesteps 10000000 --num-envs 8
-
 # Count-based exploration
 python src/agents/count_based.py
 python src/agents/count_based.py --exploration-coef 0.1 --hash-dim 128
+
+# Count-based exploration, AE-SimHash variant (currently non-functional -- see file docstring)
+python src/agents/count_based_ae.py
+
+# RND (Random Network Distillation)
+python src/agents/rnd.py
+python src/agents/rnd.py --total-timesteps 10000000 --num-envs 8
 
 # View TensorBoard logs
 tensorboard --logdir runs
 ```
 
-Key flags shared by all agents: `--seed`, `--num-envs`, `--total-timesteps`, `--capture-video`, `--track` (W&B), `--sync-envs` (required on JupyterHub), `--runs-dir`/`--videos-dir`/`--checkpoint-dir`, `--checkpoint-interval`, `--resume <path>`, `--record-room-discovery` (record on new room high-water mark instead of periodic interval), `--video-episode-interval`. `ppo.py` and `rnd.py` additionally support `--clip-reward`/`--no-clip-reward` (default on).
+Key flags shared by all agents: `--seed`, `--num-envs`, `--total-timesteps`, `--capture-video`, `--record-room-discovery`, `--video-episode-interval` (default 100 in `rnd.py`/`count_based.py`/`count_based_ae.py`, 50 in `ppo.py` — inconsistent, not yet reconciled), `--clip-reward`/`--no-clip-reward` (default on), `--track` (W&B), `--sync-envs`, `--runs-dir`/`--videos-dir`/`--checkpoint-dir`, `--checkpoint-interval`, `--resume <path>`, `--ent-coef`, `--anneal-lr`/`--no-anneal-lr`. `rnd.py` and `count_based.py` additionally have `--overlay-video`/`--overlay-episode-interval` (synced gameplay+dashboard videos with a bar-meter overlay of one calibrated metric — mutually exclusive with `--capture-video` for now). `rnd.py` additionally has `--int-gamma`, `--int-coef`, `--ext-coef`, `--update-proportion`, `--obs-norm-init-steps`; `count_based.py`/`count_based_ae.py` have `--exploration-coef`/`--hash-dim` (plus `--ae-*` flags for the AE variant). See `doc/running-agents.md` for the fuller reference (not yet updated with every flag above — check the source file's `parse_args()` for the ground truth).
 
 ## Source Code Structure (`src/`)
 
 ```
 src/
 ├── agents/
-│   ├── base.py          # Shared: NatureCNN, layer_init, make_env, RoomTracker, NewRoomRecorder
-│   ├── ppo.py           # PPO (CleanRL-style, standalone runnable)
-│   ├── count_based.py   # PPO + SimHash count-based exploration bonus
-│   └── rnd.py           # PPO + RND (raw curiosity signal, normalisation stats, dual value heads)
+│   ├── base.py            # Shared: NatureCNN, layer_init, make_env, RoomTracker, NewRoomRecorder
+│   ├── ppo.py             # PPO (CleanRL-style, standalone runnable)
+│   ├── count_based.py     # PPO + SimHash count-based exploration bonus
+│   ├── count_based_ae.py  # PPO + AE-SimHash (learned hash) -- currently non-functional, see file docstring
+│   └── rnd.py             # PPO + RND (raw curiosity signal, normalisation stats, dual value heads)
 ```
 
 Each agent file is a self-contained runnable script that imports shared utilities from `base.py`. The `sys.path.insert` at the top of each agent file makes them runnable from the project root without installing the package.
 
 `base.py` provides:
 - `NatureCNN` — Nature DQN CNN backbone `(N, 4, 84, 84) → (N, 512)`
-- `make_env(env_id, idx, capture_video, run_name, videos_dir="videos", video_episode_interval=1, record_room_discovery=False, clip_reward=True)` — builds the standard Atari preprocessing stack; passes `frameskip=1` to `gym.make` so `AtariPreprocessing` handles frame-skipping without duplication. Wrapper stack: `ALE env → RoomTracker → AtariPreprocessing → FrameStackObservation → RecordEpisodeStatistics → [ClipReward] → [RecordVideo or NewRoomRecorder]`. `ClipReward` is applied after `RecordEpisodeStatistics` so logged episodic return is always true game score; only the training reward is clipped to `[-1, 1]` (matches the RND paper's preprocessing, Burda et al. 2018, Appendix A.3).
+- `make_env(env_id, idx, capture_video, run_name, videos_dir="videos", video_episode_interval=1, record_room_discovery=False, clip_reward=True, overlay_video=False)` — builds the standard Atari preprocessing stack; passes `frameskip=1` to `gym.make` so `AtariPreprocessing` handles frame-skipping without duplication. Wrapper stack: `ALE env → RoomTracker → AtariPreprocessing → FrameStackObservation → RecordEpisodeStatistics → [ClipReward] → [OverlayFrameProbe, OR RecordVideo optionally + NewRoomRecorder stacked on top]`. `overlay_video` and `capture_video` are mutually exclusive (enforced by each agent's `train()`, not by `make_env()` itself). `ClipReward` is applied after `RecordEpisodeStatistics` so logged episodic return is always true game score; only the training reward is clipped to `[-1, 1]` (matches the RND paper's preprocessing, Burda et al. 2018, Appendix A.3).
 - `RoomTracker` — wrapper that reads room number from Atari RAM byte 3, adds `rooms_visited` to episode-end info
-- `NewRoomRecorder` — wrapper that buffers rgb frames per episode and writes an mp4 only when `rooms_visited` exceeds the episode's previous best (new room high-water mark), instead of recording on a fixed periodic interval; used via `record_room_discovery=True`
+- `NewRoomRecorder` — wrapper that buffers frames per episode and writes an mp4 only when `rooms_visited` exceeds the previous best (new room high-water mark); see "Video Recording — Room Discovery Mode" below
+- `OverlayFrameProbe` — exposes a uniform `overlay_render()` across all vector sub-envs so `envs.call("overlay_render")` is safe even though only env 0 renders; used by `--overlay-video` (see `src/agents/video_overlay.py`'s `EpisodeOverlayRecorder`)
 
 ## Experiment Tracking
 
@@ -114,7 +119,7 @@ Each agent file is a self-contained runnable script that imports shared utilitie
 tensorboard --logdir runs
 ```
 
-Key metrics to log: episodic return, episode length, rooms explored, loss curves.
+Key metrics to log: episodic return, episode length, rooms explored, loss curves. RND additionally logs intrinsic-reward and predictor-loss metrics (`mean_intrinsic_rew`, `raw_intrinsic_rew_mean`, `obs_rms_std`, `reward_rms_std`, `fwd_loss`, `explained_variance`, `approx_kl`, `clipfrac`, etc. — see "Log Analysis" below for the full table).
 
 **Weights & Biases (W&B)** is a cloud alternative worth considering once multiple algorithms are being compared. W&B's free tier adds cross-run comparison dashboards and automatic hyperparameter logging — useful when writing the results section. TensorBoard requires manually inspecting separate log directories; W&B shows everything in one view. Start with TensorBoard, migrate to W&B when running multi-algorithm comparisons.
 
@@ -135,7 +140,62 @@ env = RecordVideo(
 
 See `examples/recording_sample.py` for a working CartPole example of this pattern.
 
-For exploration runs, `make_env(..., record_room_discovery=True)` swaps this periodic trigger for `NewRoomRecorder` (see above), which only saves a clip when the episode sets a new room high-water mark — much more useful than fixed-interval sampling when most episodes revisit the same early rooms.
+## Video Recording — Room Discovery Mode
+
+`NewRoomRecorder` in `base.py` buffers `rgb_array` frames in memory during each episode. On episode end it checks `info["rooms_visited"]`; if the count exceeds the stored high-water mark it writes an `.mp4` and updates the mark, otherwise discards the buffer. Requires `render_mode="rgb_array"` and `RoomTracker` in the wrapper stack.
+
+Enable with `--capture-video --record-room-discovery`. Videos land in `videos/<run_name>/room_discovery/new_room_ep<N>_r<R>.mp4`.
+
+Standard periodic recording uses `--capture-video --video-episode-interval N` (default 100). Supported by both `rnd.py` and `count_based.py`. `--record-room-discovery` stacks on top of periodic recording (both write to the same run's video folder) rather than replacing it — a single run with both flags produces `rl-video-episode-N.mp4` files and `room_discovery/new_room_ep*.mp4` files together.
+
+## Log Analysis
+
+**Text logs** (`logs/<name>.out`) — plain stdout/stderr. Contains per-episode return/length lines and per-iteration SPS prints. Readable directly.
+
+**TensorBoard event files** (`runs/<run_name>/events.out.tfevents.*`) — binary protobuf. Parse with:
+
+```python
+from torch.utils.tensorboard.backend.event_file_loader import EventFileLoader
+# or, easier:
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
+ea = EventAccumulator("runs/<run_name>")
+ea.Reload()
+scalars = ea.Tags()["scalars"]          # list of available metric names
+steps, vals = zip(*[(e.step, e.value) for e in ea.Scalars("charts/episodic_return")])
+```
+
+**Key metrics to check when diagnosing a failed RND run:**
+
+| Metric | Healthy sign | Failure sign |
+|--------|-------------|--------------|
+| `charts/episodic_return` | Increasing trend | Flat at 0 forever |
+| `losses/entropy` | Slow decay | Rapid collapse to ~0 |
+| `charts/raw_intrinsic_rew_mean` | Non-zero, ~0.1–1.0 | Near zero throughout |
+| `charts/obs_rms_std` | Converges to ~1.0 | Stays near 0 |
+| `charts/reward_rms_std` | Non-zero | Near zero |
+| `losses/explained_variance` | Grows toward 1.0 | Stays negative/zero |
+
+**Production run data locations (local):**
+- Logs: `logs/rnd_10m_s1.out`, `logs/rnd_10m_s2.out`, `logs/ppo_5m_s1.out`
+- TensorBoard: `runs/ALE/MontezumaRevenge-v5__rnd__1__1781212716/`, `...__rnd__1__1781213250/`
+
+## JupyterHub Launch Pattern
+
+On JupyterHub, use `sys.executable` in `subprocess.Popen` — the kernel Python has all packages; the system Python does not. GPU assignment uses `CUDA_VISIBLE_DEVICES` env var:
+
+```python
+def launch(args, log_name, gpu=0):
+    env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu)}
+    proc = subprocess.Popen(
+        [sys.executable, *args],
+        stdout=open(PROJECT / "logs" / log_name, "w"), stderr=subprocess.STDOUT,
+        cwd=PROJECT, env=env,
+    )
+    return proc
+```
+
+The notebook `training-runs.ipynb` contains ready-to-run cells for all production runs.
 
 ## Evaluation Metrics
 
@@ -161,11 +221,13 @@ reflects Bellemare's numbers specifically.
 
 ## Repository Structure
 
-- `src/` — main source code (PPO, count-based, and RND agents; see Source Code Structure above)
+- `src/` — main source code (agents + shared utilities; see Source Code Structure above)
 - `examples/` — lightweight, standalone reference scripts; keep up to date with current ale_py/gymnasium API
+- `doc/` — investigation write-ups and usage guides (`running-agents.md`, `throughput-investigation.md`, `decisions.md`, `pipeline-history.md`, `10M-RND-run-failure-documentation.md`, `rnd-vs-ppo-asymmetry-investigation.md`)
+- `slurm/` — SLURM job scripts for cluster training runs (`run_ppo.slurm`, `run_count_based.slurm`, `run_rnd.slurm`, `run_rnd_falsify.slurm`)
+- `scripts/` — utility scripts, e.g. `profile_throughput.py` for measuring training SPS
 - `.claude/skills/` — Claude Code skill definitions (see below)
-- `cartpole-training/` — training videos from the CartPole recording example (not relevant to the main project)
-- `_static/` — static assets
+- `cartpole-training/`, `_static/` — gitignored; training videos/static assets from the CartPole recording example, not relevant to the main project and may not exist in a fresh checkout
 
 ## Claude Code Skills
 
