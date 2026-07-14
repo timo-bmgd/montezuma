@@ -160,7 +160,9 @@ def parse_args():
                         "(not paper-specified)")
     p.add_argument("--ae-lr", type=float, default=1e-3,
                    help="Learning rate for the AE's own Adam optimizer, decoupled from the "
-                        "policy's (paper uses Adam for both but doesn't give an explicit AE LR)")
+                        "policy's (paper uses Adam for both but doesn't give an explicit AE LR). "
+                        "NOT affected by --anneal-lr, which only anneals the policy optimizer's "
+                        "lr -- this stays fixed at --ae-lr for the whole run")
     p.add_argument("--ae-replay-capacity", type=int, default=100_000,
                    help="FIFO replay pool capacity in frames (not paper-specified)")
     p.add_argument("--image-log-interval", type=int, default=100,
@@ -311,8 +313,9 @@ class AEHashModel(nn.Module):
        and charts/unique_states grows continuously to 34,012 by the end (vs. permanently frozen
        at 889-1,342 pre-fix) without exploding to "every state is its own bucket" (the
        original, different failure mode that motivated this file's existence -- see the module
-       docstring). Checkpoint save/resume (including both optimizers and BatchNorm's running
-       statistics) verified to round-trip correctly across this change.
+       docstring). Checkpoint save/resume (including both optimizers, BatchNorm's running
+       statistics, and AEHashCounter's visit counts) verified to round-trip correctly across
+       this change.
     """
 
     _DOWNSAMPLE_SIZE = 52  # paper's input size
@@ -488,6 +491,13 @@ class AEHashCounter:
     changes only once every --ae-update-every iterations rather than continuously, which is
     itself one of the paper's two stated anti-collapse/anti-thrash mechanisms (the other being
     the D->k down-projection); see AEHashModel's docstring.
+
+    state_dict()/load_state_dict() let train() persist visit counts across --resume, unlike
+    AEReplayPool (whose non-persistence is a deliberate, documented tradeoff) -- counts are
+    small (one dict entry per unique code seen) and, unlike the replay pool's raw frames,
+    directly determine the intrinsic reward every single step, so silently resetting them on
+    resume would make every previously-well-explored state look brand new and hand out
+    maximal bonuses right when training resumes.
     """
 
     def __init__(self):
@@ -498,6 +508,7 @@ class AEHashCounter:
         return np.packbits(code.astype(np.uint8)).tobytes()
 
     def increment(self, code: np.ndarray) -> int:
+        """Increments and returns the new count for `code`."""
         key = self._key(code)
         self._counts[key] = self._counts.get(key, 0) + 1
         return self._counts[key]
@@ -509,6 +520,12 @@ class AEHashCounter:
     @property
     def num_unique(self) -> int:
         return len(self._counts)
+
+    def state_dict(self) -> dict[bytes, int]:
+        return self._counts
+
+    def load_state_dict(self, counts: dict[bytes, int]) -> None:
+        self._counts = counts
 
 
 class Agent(nn.Module):
@@ -530,7 +547,7 @@ class Agent(nn.Module):
         return action, probs.log_prob(action), probs.entropy(), self.critic(features)
 
 
-def _save_checkpoint(path, iteration, global_step, agent, ae_model, agent_optimizer, ae_optimizer, args):
+def _save_checkpoint(path, iteration, global_step, agent, ae_model, agent_optimizer, ae_optimizer, counter, args):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     torch.save({
         "iteration": iteration,
@@ -539,21 +556,35 @@ def _save_checkpoint(path, iteration, global_step, agent, ae_model, agent_optimi
         "ae_model_state_dict": ae_model.state_dict(),
         "agent_optimizer_state_dict": agent_optimizer.state_dict(),
         "ae_optimizer_state_dict": ae_optimizer.state_dict(),
+        "counter_state_dict": counter.state_dict(),
         "args": vars(args),
     }, path)
 
 
-def _load_checkpoint(path, agent, ae_model, agent_optimizer, ae_optimizer):
+def _load_checkpoint(path, agent, ae_model, agent_optimizer, ae_optimizer, counter):
     ckpt = torch.load(path, weights_only=False)
     agent.load_state_dict(ckpt["agent_state_dict"])
     ae_model.load_state_dict(ckpt["ae_model_state_dict"])
     agent_optimizer.load_state_dict(ckpt["agent_optimizer_state_dict"])
     ae_optimizer.load_state_dict(ckpt["ae_optimizer_state_dict"])
+    counter.load_state_dict(ckpt["counter_state_dict"])
     return ckpt["iteration"], ckpt["global_step"]
 
 
 def train():
     args = parse_args()
+    if args.ae_replay_capacity < 1:
+        raise SystemExit(f"--ae-replay-capacity must be >= 1, got {args.ae_replay_capacity}")
+    if args.ae_batch_size < 2:
+        raise SystemExit(f"--ae-batch-size must be >= 2 (nn.BatchNorm1d requires more than "
+                          f"one sample per batch in train mode), got {args.ae_batch_size}")
+    if args.ae_batch_size > args.ae_replay_capacity:
+        raise SystemExit(f"--ae-batch-size ({args.ae_batch_size}) cannot exceed "
+                          f"--ae-replay-capacity ({args.ae_replay_capacity}): the replay pool "
+                          f"would never reach the training batch size, silently disabling all "
+                          f"AE training for the whole run")
+    if args.ae_update_every < 1:
+        raise SystemExit(f"--ae-update-every must be >= 1, got {args.ae_update_every}")
 
     batch_size = args.num_envs * args.num_steps
     minibatch_size = batch_size // args.num_minibatches
@@ -611,7 +642,7 @@ def train():
     global_step = 0
 
     if args.resume:
-        start_iteration, global_step = _load_checkpoint(args.resume, agent, ae_model, agent_optimizer, ae_optimizer)
+        start_iteration, global_step = _load_checkpoint(args.resume, agent, ae_model, agent_optimizer, ae_optimizer, counter)
         ae_model.eval()  # load_state_dict doesn't restore the training/eval flag itself
         start_iteration += 1
         print(f"Resumed from {args.resume} at iteration {start_iteration - 1}, global_step={global_step}")
@@ -653,8 +684,10 @@ def train():
 
             intrinsic = np.zeros(args.num_envs, dtype=np.float32)
             for i in range(args.num_envs):
-                counter.increment(codes_np[i])
-                intrinsic[i] = counter.bonus(codes_np[i], args.exploration_coef)
+                # increment() already returns the post-increment count -- reuse it instead of
+                # calling bonus() separately, which would recompute the same packbits key
+                count = counter.increment(codes_np[i])
+                intrinsic[i] = args.exploration_coef / np.sqrt(max(count, 1))
             intrinsic_log.append(intrinsic.mean())
 
             combined_reward = reward + intrinsic
@@ -742,24 +775,31 @@ def train():
         have_ae_batch = len(replay_pool) >= args.ae_batch_size
         if have_ae_batch and iteration % args.ae_update_every == 0:
             ae_model.train()  # BatchNorm uses this batch's statistics only while training
-            ae_batch = replay_pool.sample(args.ae_batch_size, device)
-            logits, b_clean, target_bins = ae_model(ae_batch)
-            ae_recon_loss = F.cross_entropy(logits, target_bins, label_smoothing=args.ae_label_smoothing)
-            ae_sat_loss = torch.minimum((1 - b_clean) ** 2, b_clean ** 2).mean(dim=1).mean()
-            ae_loss = args.ae_recon_coef * ae_recon_loss + args.ae_sat_coef * ae_sat_loss
+            try:
+                ae_batch = replay_pool.sample(args.ae_batch_size, device)
+                logits, b_clean, target_bins = ae_model(ae_batch)
+                ae_recon_loss = F.cross_entropy(logits, target_bins, label_smoothing=args.ae_label_smoothing)
+                ae_sat_loss = torch.minimum((1 - b_clean) ** 2, b_clean ** 2).mean(dim=1).mean()
+                ae_loss = args.ae_recon_coef * ae_recon_loss + args.ae_sat_coef * ae_sat_loss
 
-            ae_optimizer.zero_grad()
-            ae_loss.backward()
-            nn.utils.clip_grad_norm_(ae_model.parameters(), args.max_grad_norm)
-            ae_optimizer.step()
-            ae_model.eval()  # back to running-stats normalisation for hashing/health-check/preview
+                ae_optimizer.zero_grad()
+                ae_loss.backward()
+                nn.utils.clip_grad_norm_(ae_model.parameters(), args.max_grad_norm)
+                ae_optimizer.step()
+            finally:
+                # always restore running-stats normalisation for hashing/health-check/preview,
+                # even if the block above raised -- ae_model must never be left in train() mode,
+                # since a stray batch-statistics-based hash would silently depend on whichever
+                # other frames happen to share that call's batch (see AEHashModel docstring)
+                ae_model.eval()
 
             ae_recon_loss_val = ae_recon_loss.item()
             ae_sat_loss_val = ae_sat_loss.item()
 
-        # health-check metric for AE code collapse, on a fresh replay-pool sample
+        # health-check metric for AE code collapse: only meaningful right after an update,
+        # since ae_model's weights are otherwise unchanged between --ae-update-every iterations
         bit_variance = None
-        if have_ae_batch:
+        if have_ae_batch and iteration % args.ae_update_every == 0:
             with torch.no_grad():
                 health_batch = replay_pool.sample(args.ae_batch_size, device)
                 b_clean_health, _ = ae_model.encode(health_batch, add_noise=False)
@@ -802,7 +842,7 @@ def train():
 
         if iteration % args.checkpoint_interval == 0 or iteration == num_iterations:
             ckpt_path = os.path.join(args.checkpoint_dir, run_name, f"ckpt_{iteration:06d}.pt")
-            _save_checkpoint(ckpt_path, iteration, global_step, agent, ae_model, agent_optimizer, ae_optimizer, args)
+            _save_checkpoint(ckpt_path, iteration, global_step, agent, ae_model, agent_optimizer, ae_optimizer, counter, args)
 
     envs.close()
     writer.close()
