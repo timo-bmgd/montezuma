@@ -33,6 +33,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from agents.base import layer_init, make_env
+from agents.riders import SimHashRider, StepLogger, save_rnd_artifact, save_simhash_artifact
 
 
 def parse_args():
@@ -86,6 +87,34 @@ def parse_args():
                    help="Fraction of minibatch samples used to train the RND predictor")
     p.add_argument("--obs-norm-init-steps", type=int, default=50,
                    help="Iterations of random rollouts to initialize obs running stats")
+    # passive SimHash rider (dual-signal novelty comparison)
+    p.add_argument("--passive-simhash", action="store_true",
+                   help="Run a passive SimHash visit counter on the same observation stream: "
+                        "its bonus is computed and logged per step, but NEVER added to the "
+                        "reward. Combine with --step-log for the dual-signal analysis")
+    p.add_argument("--rider-seed", type=int, default=None,
+                   help="Seed for the rider's projection matrix (default: --seed + 1000)")
+    p.add_argument("--rider-hash-dim", type=int, default=64,
+                   help="Bits in the rider's SimHash code")
+    p.add_argument("--rider-exploration-coef", type=float, default=0.01,
+                   help="beta in the rider's beta/sqrt(n) bonus (count_based.py's default)")
+    p.add_argument("--rider-hash-mode", choices=["index", "pool"], default="pool",
+                   help="Rider hash pipeline -- see count_based.py --hash-mode")
+    p.add_argument("--rider-hash-pool-size", type=int, default=16,
+                   help="Side length of the area-pooled input when --rider-hash-mode pool")
+    # per-step dual-bonus logging
+    p.add_argument("--step-log", action="store_true",
+                   help="Write per-(step, env) records of extrinsic reward, active bonus, "
+                        "passive bonus, room id, episode id, done to compressed .npz shards "
+                        "under {runs-dir}/{run_name}/step_log/")
+    p.add_argument("--step-log-flush-iters", type=int, default=50,
+                   help="Iterations per step-log shard")
+    # selective small-artefact checkpointing
+    p.add_argument("--artifact-interval", type=int, default=0,
+                   help="Every N iterations (and at the final iteration / auto-stop), save "
+                        "small analysis artefacts: RND predictor+target state_dicts + running "
+                        "stats (.pt) and, with --passive-simhash, the rider's count table "
+                        "(.npz). No optimizer states. 0 (default) disables")
     # infrastructure
     p.add_argument("--sync-envs", action="store_true",
                    help="Use SyncVectorEnv instead of AsyncVectorEnv (easier debugging)")
@@ -227,9 +256,9 @@ class RewardForwardFilter:
 
 
 def _save_checkpoint(path, iteration, global_step, agent, rnd_model, optimizer,
-                     obs_rms, reward_rms, reward_filter, args):
+                     obs_rms, reward_rms, reward_filter, args, rider=None):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    torch.save({
+    payload = {
         "iteration": iteration,
         "global_step": global_step,
         "agent_state_dict": agent.state_dict(),
@@ -243,10 +272,16 @@ def _save_checkpoint(path, iteration, global_step, agent, rnd_model, optimizer,
         "reward_rms_count": reward_rms.count,
         "reward_filter_rewems": reward_filter.rewems,
         "args": vars(args),
-    }, path)
+    }
+    if rider is not None:
+        packed_keys, counts = rider.counter.state_arrays()
+        payload["rider_counter_packed_keys"] = packed_keys
+        payload["rider_counter_counts"] = counts
+    torch.save(payload, path)
 
 
-def _load_checkpoint(path, agent, rnd_model, optimizer, obs_rms, reward_rms, reward_filter):
+def _load_checkpoint(path, agent, rnd_model, optimizer, obs_rms, reward_rms,
+                     reward_filter, rider=None):
     ckpt = torch.load(path, weights_only=False)
     agent.load_state_dict(ckpt["agent_state_dict"])
     rnd_model.load_state_dict(ckpt["rnd_model_state_dict"])
@@ -258,6 +293,13 @@ def _load_checkpoint(path, agent, rnd_model, optimizer, obs_rms, reward_rms, rew
     reward_rms.var = ckpt["reward_rms_var"]
     reward_rms.count = ckpt["reward_rms_count"]
     reward_filter.rewems = ckpt["reward_filter_rewems"]
+    if rider is not None:
+        if "rider_counter_packed_keys" in ckpt:
+            rider.counter.load_state_arrays(ckpt["rider_counter_packed_keys"],
+                                            ckpt["rider_counter_counts"])
+        else:
+            print("WARNING: --passive-simhash set but checkpoint has no rider count "
+                  "table -- rider visit counts restart from empty.")
     return ckpt["iteration"], ckpt["global_step"]
 
 
@@ -340,6 +382,21 @@ def train():
     reward_rms = RunningMeanStd()
     reward_filter = RewardForwardFilter(args.int_gamma)
 
+    rider = None
+    if args.passive_simhash:
+        rider_seed = args.rider_seed if args.rider_seed is not None else args.seed + 1000
+        rider = SimHashRider(hash_dim=args.rider_hash_dim, seed=rider_seed,
+                             beta=args.rider_exploration_coef,
+                             mode=args.rider_hash_mode,
+                             pool_size=args.rider_hash_pool_size)
+        print(f"Passive SimHash rider enabled (rider_seed={rider_seed})")
+
+    step_logger = None
+    if args.step_log:
+        step_logger = StepLogger(f"{args.runs_dir}/{run_name}/step_log",
+                                 args.num_steps, args.num_envs,
+                                 flush_every=args.step_log_flush_iters)
+
     obs_shape = envs.single_observation_space.shape  # (4, 84, 84)
     obs_buf       = torch.zeros((args.num_steps, args.num_envs) + obs_shape, device=device)
     act_buf       = torch.zeros((args.num_steps, args.num_envs), device=device)
@@ -355,7 +412,8 @@ def train():
 
     if args.resume:
         start_iteration, global_step = _load_checkpoint(
-            args.resume, agent, rnd_model, optimizer, obs_rms, reward_rms, reward_filter
+            args.resume, agent, rnd_model, optimizer, obs_rms, reward_rms,
+            reward_filter, rider=rider
         )
         start_iteration += 1
         print(f"Resumed from {args.resume} at iteration {start_iteration - 1}, global_step={global_step}")
@@ -383,6 +441,7 @@ def train():
     collapse_streak = 0
     raw_intrinsic_peak = 0.0
     action_space_n = envs.single_action_space.n
+    passive_buf = np.zeros((args.num_steps, args.num_envs), dtype=np.float32)
 
     for iteration in range(start_iteration, num_iterations + 1):
         if args.anneal_lr:
@@ -390,6 +449,8 @@ def train():
             optimizer.param_groups[0]["lr"] = frac * args.lr
 
         # ── rollout collection ──────────────────────────────────────────────
+        if step_logger is not None:
+            step_logger.begin_iteration(iteration)
         for step in range(args.num_steps):
             global_step += args.num_envs
             obs_buf[step]  = next_obs
@@ -414,6 +475,18 @@ def train():
             with torch.no_grad():
                 pred, tgt = rnd_model(rnd_obs)
                 intr_buf[step] = ((tgt - pred).pow(2).sum(1) / 2).flatten()
+
+            # passive rider: bonus computed and logged on the same observations,
+            # but never added to any reward stream
+            passive_bonus = None
+            if rider is not None:
+                passive_bonus = rider.compute_bonus(next_obs_np)
+                passive_buf[step] = passive_bonus
+
+            if step_logger is not None:
+                step_logger.log_step(step, global_step, reward, next_done_np, infos,
+                                     bonus_active=intr_buf[step].cpu().numpy(),
+                                     bonus_passive=passive_bonus)
 
             if overlay_recorder is not None:
                 raw0 = float(intr_buf[step, 0].item())
@@ -442,7 +515,10 @@ def train():
                         writer.add_scalar("charts/rooms_visited", int(infos["rooms_visited"][i]), global_step)
 
         # ── normalise intrinsic rewards ─────────────────────────────────────
-        curiosity_np = intr_buf.cpu().numpy()  # (T, N)
+        # .copy() matters on CPU devices: .cpu() is a no-op there, so without it
+        # curiosity_np would alias intr_buf's storage and the in-place division
+        # below would silently normalise the "raw" values logged further down
+        curiosity_np = intr_buf.cpu().numpy().copy()  # (T, N)
         # update discounted running estimate per env, then normalise with std
         discounted_per_env = np.array(
             [reward_filter.update(curiosity_np[:, i]) for i in range(args.num_envs)]
@@ -452,6 +528,10 @@ def train():
         count = discounted_per_env.size
         reward_rms.update_from_moments(mean, std**2, count)
         intr_buf /= np.sqrt(reward_rms.var)
+
+        if step_logger is not None:
+            # active RND bonuses were logged raw; SimHash rider has no normalisation
+            step_logger.end_iteration(norm_active=float(np.sqrt(reward_rms.var)))
 
         # ── dual GAE ────────────────────────────────────────────────────────
         with torch.no_grad():
@@ -571,6 +651,27 @@ def train():
         writer.add_scalar("losses/fwd_loss",                fwd_loss.item(),                         global_step)
         writer.add_scalar("losses/explained_variance",      explained_var,                           global_step)
 
+        if rider is not None:
+            writer.add_scalar("rider/bonus_mean",    float(passive_buf.mean()),   global_step)
+            writer.add_scalar("rider/bonus_std",     float(passive_buf.std()),    global_step)
+            writer.add_scalar("rider/unique_states", rider.counter.num_unique,    global_step)
+            if iteration % 10 == 0:
+                occ = rider.counter.occupancy_stats()
+                writer.add_scalar("rider/hash_singleton_frac",   occ["singleton_frac"],   global_step)
+                writer.add_scalar("rider/hash_mean_count",       occ["mean_count"],       global_step)
+                writer.add_scalar("rider/hash_max_count",        occ["max_count"],        global_step)
+                writer.add_scalar("rider/hash_top_bucket_share", occ["top_bucket_share"], global_step)
+
+        if args.artifact_interval and (iteration % args.artifact_interval == 0
+                                       or iteration == num_iterations):
+            art_dir = os.path.join(args.checkpoint_dir, run_name, "artifacts")
+            save_rnd_artifact(os.path.join(art_dir, f"rnd_{iteration:06d}.pt"),
+                              iteration, global_step, rnd_model, obs_rms, reward_rms)
+            if rider is not None:
+                save_simhash_artifact(os.path.join(art_dir, f"rider_simhash_{iteration:06d}.npz"),
+                                      iteration, global_step, rider.counter,
+                                      beta=args.rider_exploration_coef)
+
         if args.auto_stop:
             raw_intrinsic_mean = float(curiosity_np.mean())
             raw_intrinsic_peak = max(raw_intrinsic_peak, raw_intrinsic_mean)
@@ -595,7 +696,18 @@ def train():
                                          f"ckpt_{iteration:06d}_autostop.pt")
                 _save_checkpoint(ckpt_path, iteration, global_step,
                                  agent, rnd_model, optimizer,
-                                 obs_rms, reward_rms, reward_filter, args)
+                                 obs_rms, reward_rms, reward_filter, args, rider=rider)
+                if args.artifact_interval:
+                    art_dir = os.path.join(args.checkpoint_dir, run_name, "artifacts")
+                    save_rnd_artifact(os.path.join(art_dir, f"rnd_{iteration:06d}_autostop.pt"),
+                                      iteration, global_step, rnd_model, obs_rms, reward_rms)
+                    if rider is not None:
+                        save_simhash_artifact(
+                            os.path.join(art_dir, f"rider_simhash_{iteration:06d}_autostop.npz"),
+                            iteration, global_step, rider.counter,
+                            beta=args.rider_exploration_coef)
+                if step_logger is not None:
+                    step_logger.close()
                 envs.close()
                 writer.close()
                 sys.exit(42)
@@ -604,8 +716,10 @@ def train():
             ckpt_path = os.path.join(args.checkpoint_dir, run_name, f"ckpt_{iteration:06d}.pt")
             _save_checkpoint(ckpt_path, iteration, global_step,
                              agent, rnd_model, optimizer,
-                             obs_rms, reward_rms, reward_filter, args)
+                             obs_rms, reward_rms, reward_filter, args, rider=rider)
 
+    if step_logger is not None:
+        step_logger.close()
     envs.close()
     writer.close()
 

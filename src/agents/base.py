@@ -45,7 +45,12 @@ class RoomTracker(gym.Wrapper):
     """Tracks unique rooms visited in Montezuma's Revenge per episode.
 
     Room number is read from Atari RAM byte 3 after every step.
-    Appends rooms_visited to info when the episode ends.
+    Appends rooms_visited to info when the episode ends. Also exposes the
+    *current* room id as info["room"] on every step AND on reset — the reset
+    case matters under gymnasium 1.x NEXT_STEP autoreset, where the vector env
+    returns the sub-env's reset() info for the autoreset step; without it,
+    per-step logs (see agents/riders.py StepLogger) would have a hole at every
+    episode boundary.
     """
 
     _ROOM_RAM_ADDR = 3
@@ -53,12 +58,14 @@ class RoomTracker(gym.Wrapper):
     def reset(self, **kwargs):
         obs, info = super().reset(**kwargs)
         self._rooms: set[int] = {self._room()}
+        info["room"] = self._room()
         return obs, info
 
     def step(self, action):
         obs, reward, terminated, truncated, info = super().step(action)
         self._rooms.add(self._room())
         info["rooms_visited"] = len(self._rooms)
+        info["room"] = self._room()
         return obs, reward, terminated, truncated, info
 
     def _room(self) -> int:

@@ -208,3 +208,43 @@ paper-default hyperparameters would confirm the collapse persists independent
 of `ent_coef`, pointing back at the still-open `AutoresetMode.NEXT_STEP`
 GAE-masking bug (documented above, explicitly out of scope for this round of
 changes) as the next lever, not more compute.
+
+---
+
+## 2026-07-14 — Passive riders, pool-mode SimHash, per-step dual-bonus logging
+
+**Change:** Added the dual-signal comparison infrastructure
+(`src/agents/riders.py`, wired into `count_based.py --passive-rnd` and
+`rnd.py --passive-simhash`): one method drives exploration while the other's
+bonus is computed and logged on the same observation stream but never added
+to the reward. Plus `--step-log` (per-(step, env) records of both bonuses,
+room id, episode id), `--artifact-interval` (small analysis artefacts: RND
+predictor/target + running stats ~16 MB, bit-packed count table <1 MB — no
+optimizer states), and `--hash-mode pool` for `SimHashCounter`. Full design
+and launch commands: `doc/dual-signal-rider.md`.
+
+**Why `--hash-mode pool`:** `scripts/simhash_occupancy_probe.py` (50k
+random-policy observations) showed the original hash (stack-mean + 128
+linspace-sampled pixels) is degenerate on Montezuma — but **collapsed**, not
+all-unique as `count_based.py`'s docstring had claimed: a single bucket
+absorbs 50.1% of all visits (max n=25,063), while 49% of buckets are
+singletons. Tang et al. 2017-style pooling (last stack frame, area-resized to
+16×16, k=64) measured healthy: top bucket 3.0% of visits, mean count 16.0,
+singleton fraction 0.39. The `index` default is kept for backward
+compatibility; production count runs should pass `--hash-mode pool`
+(`slurm/run_count_rnd_rider.slurm` does).
+
+**No-op guarantee:** riders isolate all their RNG (forked-RNG network init,
+private numpy Generator for masks/permutations, own optimizer).
+`scripts/check_rider_noop.py` verifies agent weights, optimizer state,
+global_step, and full step-log trajectories are bit-identical with and
+without `--passive-rnd`. Re-run it after touching rider or rollout code.
+
+**Also fixed while in there:** `count_based.py` gained the same `--resume`
+run_name recovery as `rnd.py`/`ppo.py` (it still fragmented runs on resume);
+count-based checkpoints now carry the SimHash count table (previously counts
+silently reset to empty on resume, inflating bonuses); `rnd.py`'s
+`curiosity_np` now copies before the in-place normalisation of `intr_buf`
+(on CPU devices `.cpu().numpy()` aliased the same storage, so the "raw"
+intrinsic logs were silently post-normalisation values — GPU runs were
+unaffected).

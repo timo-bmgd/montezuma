@@ -1,9 +1,9 @@
 """AE-SimHash count-based exploration + PPO for Montezuma's Revenge.
 
-Sibling to count_based.py's fixed-random-projection SimHash, which is documented there
-to fail on Montezuma's Revenge: a random Gaussian projection of raw downsampled pixels
-gives nearly every state its own hash bucket (n≈1 everywhere), so the count-based bonus
-degenerates to a flat constant with no exploration signal.
+Sibling to count_based.py's fixed-random-projection SimHash, whose original "index"
+pipeline is documented there to be degenerate on Montezuma's Revenge (measured
+2026-07-14: collapsed — one bucket absorbs ~50% of visits — not all-unique as
+previously claimed; count_based.py's "pool" mode addresses this without a learned hash).
 
 This variant replaces the fixed random projection with a trained autoencoder (Tang et al.,
 2017 — "#Exploration: A Study of Count-Based Exploration for Deep Reinforcement Learning",
