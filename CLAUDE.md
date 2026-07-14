@@ -227,8 +227,8 @@ reflects Bellemare's numbers specifically.
 
 - `src/` — main source code (agents + shared utilities; see Source Code Structure above)
 - `examples/` — lightweight, standalone reference scripts; keep up to date with current ale_py/gymnasium API
-- `doc/` — investigation write-ups and usage guides (`running-agents.md`, `throughput-investigation.md`, `decisions.md`, `pipeline-history.md`, `10M-RND-run-failure-documentation.md`, `rnd-vs-ppo-asymmetry-investigation.md`)
-- `slurm/` — SLURM job scripts for cluster training runs (`run_ppo.slurm`, `run_count_based.slurm`, `run_rnd.slurm`, `run_rnd_falsify.slurm`)
+- `doc/` — investigation write-ups and usage guides (`running-agents.md`, `throughput-investigation.md`, `decisions.md`, `pipeline-history.md`, `10M-RND-run-failure-documentation.md`, `rnd-vs-ppo-asymmetry-investigation.md`, `hpc-onboarding.md`)
+- `slurm/` — SLURM job scripts for cluster training runs: `run_rnd_smoke.slurm`/`run_ppo_smoke.slurm` (infrastructure smoke tests, minutes-scale, run these first — see `doc/hpc-onboarding.md`), `run_rnd.slurm`/`run_ppo.slurm` (production runs, hours-scale), `run_count_based.slurm` (production, count-based pipeline still under separate setup by the user). `run_rnd_falsify.slurm` was removed 2026-07-14 — its ent_coef hypothesis was reverted (see `doc/decisions.md`) and it was repurposed into `run_rnd_smoke.slurm`.
 - `scripts/` — utility scripts, e.g. `profile_throughput.py` for measuring training SPS
 - `.claude/skills/` — Claude Code skill definitions (see below)
 - `cartpole-training/`, `_static/` — gitignored; training videos/static assets from the CartPole recording example, not relevant to the main project and may not exist in a fresh checkout
