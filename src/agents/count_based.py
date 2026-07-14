@@ -283,7 +283,7 @@ def train():
                     "applied_bonus": float(intrinsic[0]),
                     "unique_states": float(counter.num_unique),
                 } if overlay_logger.is_recording else {}
-                overlay_logger.after_step(int(action_np[0]), metrics0, bool(terminated[0]), bool(truncated[0]))
+                overlay_logger.after_step(envs, int(action_np[0]), metrics0, bool(terminated[0]), bool(truncated[0]))
 
             if "_episode" in infos:
                 for i, ended in enumerate(infos["_episode"]):
