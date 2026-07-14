@@ -77,8 +77,9 @@ python src/agents/ppo.py --total-timesteps 1000000 --num-envs 4
 python src/agents/count_based.py
 python src/agents/count_based.py --exploration-coef 0.1 --hash-dim 128
 
-# Count-based exploration, AE-SimHash variant (currently non-functional -- see file docstring)
+# Count-based exploration, AE-SimHash variant
 python src/agents/count_based_ae.py
+python src/agents/count_based_ae.py --ae-update-every 3 --ae-replay-capacity 100000
 
 # RND (Random Network Distillation)
 python src/agents/rnd.py
@@ -88,7 +89,7 @@ python src/agents/rnd.py --total-timesteps 10000000 --num-envs 8
 tensorboard --logdir runs
 ```
 
-Key flags shared by all agents: `--seed`, `--num-envs`, `--total-timesteps`, `--capture-video`, `--record-room-discovery`, `--video-episode-interval` (default 100 in `rnd.py`/`count_based.py`/`count_based_ae.py`, 50 in `ppo.py` — inconsistent, not yet reconciled), `--clip-reward`/`--no-clip-reward` (default on), `--track` (W&B), `--sync-envs`, `--runs-dir`/`--videos-dir`/`--checkpoint-dir`, `--checkpoint-interval`, `--resume <path>`, `--ent-coef`, `--anneal-lr`/`--no-anneal-lr`. `rnd.py` and `count_based.py` additionally have `--overlay-video`/`--overlay-episode-interval` (synced gameplay+dashboard videos with a bar-meter overlay of one calibrated metric — mutually exclusive with `--capture-video` for now). `rnd.py` additionally has `--int-gamma`, `--int-coef`, `--ext-coef`, `--update-proportion`, `--obs-norm-init-steps`; `count_based.py`/`count_based_ae.py` have `--exploration-coef`/`--hash-dim` (plus `--ae-*` flags for the AE variant). See `doc/running-agents.md` for the fuller reference (not yet updated with every flag above — check the source file's `parse_args()` for the ground truth).
+Key flags shared by all agents: `--seed`, `--num-envs`, `--total-timesteps`, `--capture-video`, `--record-room-discovery`, `--video-episode-interval` (default 100 in `rnd.py`/`count_based.py`/`count_based_ae.py`, 50 in `ppo.py` — inconsistent, not yet reconciled), `--clip-reward`/`--no-clip-reward` (default on), `--track` (W&B), `--sync-envs`, `--runs-dir`/`--videos-dir`/`--checkpoint-dir`, `--checkpoint-interval`, `--resume <path>`, `--ent-coef`, `--anneal-lr`/`--no-anneal-lr`. `rnd.py` and `count_based.py` additionally have `--overlay-video`/`--overlay-episode-interval` (synced gameplay+dashboard videos with a bar-meter overlay of one calibrated metric — mutually exclusive with `--capture-video` for now). `rnd.py` additionally has `--int-gamma`, `--int-coef`, `--ext-coef`, `--update-proportion`, `--obs-norm-init-steps`; `count_based.py`/`count_based_ae.py` have `--exploration-coef`/`--hash-dim` (in `count_based_ae.py`, `--hash-dim` is the *final*, SimHash-projected counting dimension k — see below). `count_based_ae.py` additionally has `--ae-code-dim` (the AE's own bottleneck D, down-projected to `--hash-dim` bits), `--ae-update-every`/`--ae-replay-capacity`/`--ae-batch-size`/`--ae-lr` (periodic, replay-pool-sourced AE training, decoupled from the policy optimizer — see file docstring), `--ae-recon-coef`/`--ae-sat-coef`/`--ae-noise-amplitude`/`--ae-num-bins`/`--ae-label-smoothing` (autoencoder loss/architecture knobs), `--image-log-interval`. See `doc/running-agents.md` for the fuller reference (not yet updated with every flag above — check the source file's `parse_args()` for the ground truth).
 
 `--resume <path>` now derives `run_name` from the checkpoint's own path (`{checkpoint_dir}/{run_name}/ckpt_XXXXXX.pt`) in both `rnd.py` and `ppo.py`, instead of generating a fresh timestamped run on every resume — a resumed run continues writing into the *same* TensorBoard/W&B run. This matters because `run_name` itself can contain `/` (`env_id` is `ALE/MontezumaRevenge-v5`), so the fix is `Path(args.resume).resolve().parent.relative_to(Path(args.checkpoint_dir).resolve())`, not just `.parent.name` (which drops the `ALE/` segment). `--checkpoint-dir` must match between the original run and the `--resume` invocation for this to work.
 
@@ -102,7 +103,7 @@ src/
 │   ├── base.py            # Shared: NatureCNN, layer_init, make_env, RoomTracker, NewRoomRecorder
 │   ├── ppo.py             # PPO (CleanRL-style, standalone runnable)
 │   ├── count_based.py     # PPO + SimHash count-based exploration bonus
-│   ├── count_based_ae.py  # PPO + AE-SimHash (learned hash) -- currently non-functional, see file docstring
+│   ├── count_based_ae.py  # PPO + AE-SimHash (learned hash, two-stage down-projected SimHash count)
 │   └── rnd.py             # PPO + RND (raw curiosity signal, normalisation stats, dual value heads)
 ```
 
