@@ -18,6 +18,7 @@ collapse (e.g. RND's intrinsic reward shrinking 20x over training) that the
 bar is meant to make visible at a glance across many recorded episodes.
 """
 
+import functools
 import pathlib
 
 import matplotlib
@@ -26,6 +27,17 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+
+
+@functools.lru_cache(maxsize=None)
+def _label_font(size):
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        # Pillow < 10.1 has no size parameter; use matplotlib's bundled DejaVu Sans
+        # so the label still renders at the requested size on older installs.
+        from matplotlib import font_manager
+        return ImageFont.truetype(font_manager.findfont("DejaVu Sans"), size)
 
 
 def _draw_bar_meter(img, value, vmin, vmax, label="r"):
@@ -51,7 +63,7 @@ def _draw_bar_meter(img, value, vmin, vmax, label="r"):
     draw.rectangle([x0, y0, x1, y1], outline=(255, 255, 255), width=1)
     if frac > 0:
         draw.rectangle([x0 + 1, fill_top, x1 - 1, y1 - 1], fill=(255, 200, 0))
-    font = ImageFont.load_default(size=label_h)
+    font = _label_font(label_h)
     draw.text((x0, y1 + 1), label, fill=(255, 255, 255), font=font,
               stroke_width=1, stroke_fill=(0, 0, 0))
     return img
