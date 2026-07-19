@@ -8,5 +8,7 @@ runs/
 videos/
 checkpoints/
 logs/
+slurm-logs/*
+!slurm-logs/.gitkeep
 .DS_Store
 .claude/settings.local.json

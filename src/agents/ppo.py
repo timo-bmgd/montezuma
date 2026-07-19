@@ -24,7 +24,8 @@ from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from agents.base import NatureCNN, layer_init, make_env
+from agents.base import (NatureCNN, NoisyTVWrapper, check_tv_args_match,
+                         check_tv_geometry, layer_init, make_env)
 
 
 def parse_args():
@@ -43,6 +44,21 @@ def parse_args():
                    help="Record a video every N episodes (env 0 only, when --capture-video is set)")
     p.add_argument("--clip-reward", action=argparse.BooleanOptionalAction, default=True,
                    help="Clip extrinsic reward to [-1, 1] (standard Atari preprocessing)")
+    # noisy TV (control runs for the RND experiment -- see doc/noisy-tv-experiment.md)
+    p.add_argument("--tv-mode", choices=["off", "static", "remote", "sham-remote"], default="off",
+                   help="Inject a synthetic noise patch into observations. static = always-on, "
+                        "resampled every --tv-refresh-every steps; remote = extra NOOP-mapped "
+                        "action that resamples the patch; sham-remote = the extra action but no "
+                        "patch. PPO has no intrinsic reward, so PPO+TV is the no-curiosity "
+                        "control: capture should not occur")
+    p.add_argument("--tv-size", type=int, nargs=2, default=[12, 84], metavar=("H", "W"),
+                   help="TV patch height x width in 84x84-frame pixels (default: the full HUD "
+                        "band -- see rnd.py's help for why area is the stimulus-strength lever)")
+    p.add_argument("--tv-position", type=int, nargs=2, default=[0, 0], metavar=("ROW", "COL"),
+                   help="TV patch top-left corner in the 84x84 frame (default HUD band; rows "
+                        ">=12 are playfield in every room and must stay clear)")
+    p.add_argument("--tv-refresh-every", type=int, default=1,
+                   help="static mode only: resample the patch every N agent steps")
     # env
     p.add_argument("--env-id", default="ALE/MontezumaRevenge-v5")
     p.add_argument("--total-timesteps", type=int, default=10_000_000)
@@ -118,8 +134,12 @@ def _save_checkpoint(path, iteration, global_step, agent, optimizer, args):
     }, path)
 
 
-def _load_checkpoint(path, agent, optimizer):
+def _load_checkpoint(path, agent, optimizer, args):
     ckpt = torch.load(path, weights_only=False)
+    # Guard BEFORE restoring any state: an action-space-changing tv mismatch
+    # would otherwise die in load_state_dict with a raw shape error instead of
+    # the guard's actionable message.
+    check_tv_args_match(ckpt["args"], args)
     agent.load_state_dict(ckpt["agent_state_dict"])
     optimizer.load_state_dict(ckpt["optimizer_state_dict"])
     return ckpt["iteration"], ckpt["global_step"]
@@ -127,6 +147,9 @@ def _load_checkpoint(path, agent, optimizer):
 
 def train():
     args = parse_args()
+    # Fail fast on invalid TV geometry in every mode (with --tv-mode off the
+    # wrapper never runs its own check).
+    check_tv_geometry(tuple(args.tv_size), tuple(args.tv_position), args.tv_refresh_every)
 
     batch_size = args.num_envs * args.num_steps
     minibatch_size = batch_size // args.num_minibatches
@@ -164,7 +187,9 @@ def train():
     VecCls = gym.vector.SyncVectorEnv if args.sync_envs else gym.vector.AsyncVectorEnv
     envs = VecCls(
         [make_env(args.env_id, i, args.capture_video, run_name, args.videos_dir, args.video_episode_interval,
-                  args.record_room_discovery, clip_reward=args.clip_reward) for i in range(args.num_envs)]
+                  args.record_room_discovery, clip_reward=args.clip_reward, tv_mode=args.tv_mode,
+                  tv_size=tuple(args.tv_size), tv_position=tuple(args.tv_position),
+                  tv_refresh_every=args.tv_refresh_every) for i in range(args.num_envs)]
     )
 
     agent = Agent(envs).to(device)
@@ -182,7 +207,7 @@ def train():
     global_step = 0
 
     if args.resume:
-        start_iteration, global_step = _load_checkpoint(args.resume, agent, optimizer)
+        start_iteration, global_step = _load_checkpoint(args.resume, agent, optimizer, args)
         start_iteration += 1
         print(f"Resumed from {args.resume} at iteration {start_iteration - 1}, global_step={global_step}")
 
@@ -299,6 +324,12 @@ def train():
         print(f"iteration={iteration}/{num_iterations}  SPS={sps}")
         writer.add_scalar("charts/learning_rate",     optimizer.param_groups[0]["lr"], global_step)
         writer.add_scalar("charts/SPS",               sps,                             global_step)
+        if args.tv_mode in ("remote", "sham-remote"):
+            # Behavioral-capture metric: fraction of chosen actions that press
+            # the TV remote. Uniform-policy chance = 1/n.
+            tv_action = NoisyTVWrapper.remote_action_index(action_space_n)
+            tv_frac = (act_buf == float(tv_action)).float().mean().item()
+            writer.add_scalar("charts/tv_action_frac", tv_frac,                        global_step)
         writer.add_scalar("losses/value_loss",        v_loss.item(),                   global_step)
         writer.add_scalar("losses/policy_loss",       pg_loss.item(),                  global_step)
         writer.add_scalar("losses/entropy",           entropy.mean().item(),           global_step)
