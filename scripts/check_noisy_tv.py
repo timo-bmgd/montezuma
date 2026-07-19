@@ -47,8 +47,9 @@ def _find_tv(env):
 
 
 def _region(obs, tv):
-    row, col = tv.position
-    return obs[..., row : row + tv.size[0], col : col + tv.size[1]]
+    from agents.base import tv_region_slices
+    rs, cs = tv_region_slices(tv.position, tv.size)
+    return obs[..., rs, cs]
 
 
 def check_static_reset_fill():
@@ -72,7 +73,7 @@ def check_remote_press_semantics():
     for a in range(18):
         obs, _, _, _, _ = env.step(a)
         assert (_region(obs, tv)[3] == p0).all(), f"game action {a} must not resample the patch"
-    obs, _, _, _, _ = env.step(18)
+    obs, _, _, _, _ = env.step(tv.tv_action)
     assert not (_region(obs, tv)[3] == p0).all(), "pressing the remote must resample the patch"
     env.close()
 
@@ -88,13 +89,19 @@ def check_remote_press_semantics():
 def check_sham_equals_off():
     env_sham = _make(tv_mode="sham-remote")
     env_off = _make()
+    sham_tv_action = _find_tv(env_sham).tv_action
     obs_s, _ = env_sham.reset(seed=11)
     obs_o, _ = env_off.reset(seed=11)
     assert (obs_s == obs_o).all()
     for i in range(100):
-        a = (i * 5) % 18  # never the TV action: off has no action 18
-        obs_s, r_s, te_s, tr_s, _ = env_sham.step(a)
-        obs_o, r_o, te_o, tr_o, _ = env_off.step(a)
+        if i % 7 == 3:
+            # Exercise the remap: sham's remote must act as NOOP(0) in the game,
+            # so its stream stays identical to the off env stepping 0.
+            a_s, a_o = sham_tv_action, 0
+        else:
+            a_s = a_o = (i * 5) % 18
+        obs_s, r_s, te_s, tr_s, _ = env_sham.step(a_s)
+        obs_o, r_o, te_o, tr_o, _ = env_off.step(a_o)
         assert (obs_s == obs_o).all() and r_s == r_o and te_s == te_o and tr_s == tr_o, \
             f"sham-remote diverged from off at step {i}"
         if te_s or tr_s:
@@ -102,7 +109,7 @@ def check_sham_equals_off():
             obs_o, _ = env_off.reset()
     env_sham.close()
     env_off.close()
-    print("ok: sham-remote observations byte-identical to off")
+    print("ok: sham-remote observations byte-identical to off (incl. remote-as-NOOP)")
 
 
 def check_noise_reproducibility():
@@ -112,7 +119,7 @@ def check_noise_reproducibility():
         obs, _ = env.reset(seed=seed)
         stream = [_region(obs, tv)[3].tobytes()]
         for i in range(60):
-            a = 18 if i % 5 == 0 else (i * 7) % 18
+            a = tv.tv_action if i % 5 == 0 else (i * 7) % 18
             obs, _, te, tr, _ = env.step(a)
             stream.append(_region(obs, tv)[3].tobytes())
             if te or tr:

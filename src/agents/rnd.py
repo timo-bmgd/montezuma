@@ -32,7 +32,8 @@ from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from agents.base import check_tv_args_match, layer_init, make_env
+from agents.base import (NoisyTVWrapper, check_tv_args_match, check_tv_geometry,
+                         layer_init, make_env, tv_region_slices)
 
 
 def parse_args():
@@ -271,8 +272,12 @@ def _save_checkpoint(path, iteration, global_step, agent, rnd_model, optimizer,
     }, path)
 
 
-def _load_checkpoint(path, agent, rnd_model, optimizer, obs_rms, reward_rms, reward_filter):
+def _load_checkpoint(path, agent, rnd_model, optimizer, obs_rms, reward_rms, reward_filter, args):
     ckpt = torch.load(path, weights_only=False)
+    # Guard BEFORE restoring any state: an action-space-changing tv mismatch
+    # would otherwise die in load_state_dict with a raw shape error instead of
+    # the guard's actionable message.
+    check_tv_args_match(ckpt["args"], args)
     agent.load_state_dict(ckpt["agent_state_dict"])
     rnd_model.load_state_dict(ckpt["rnd_model_state_dict"])
     optimizer.load_state_dict(ckpt["optimizer_state_dict"])
@@ -283,7 +288,7 @@ def _load_checkpoint(path, agent, rnd_model, optimizer, obs_rms, reward_rms, rew
     reward_rms.var = ckpt["reward_rms_var"]
     reward_rms.count = ckpt["reward_rms_count"]
     reward_filter.rewems = ckpt["reward_filter_rewems"]
-    return ckpt["iteration"], ckpt["global_step"], ckpt["args"]
+    return ckpt["iteration"], ckpt["global_step"]
 
 
 def _normalize_obs(obs_np, obs_rms, device):
@@ -293,10 +298,20 @@ def _normalize_obs(obs_np, obs_rms, device):
     return ((torch.from_numpy(obs_np).to(device) - mean) / std).clip(-5, 5).float()
 
 
+def _rnd_error(rnd_model, x):
+    """Per-sample RND prediction error — the intrinsic reward before normalisation."""
+    pred, tgt = rnd_model(x)
+    return (tgt - pred).pow(2).sum(1) / 2
+
+
 def train():
     args = parse_args()
     if args.overlay_video and args.capture_video:
         raise SystemExit("--overlay-video and --capture-video are mutually exclusive in this first version")
+    # Fail fast on invalid TV geometry in every mode — with --tv-mode off the
+    # wrapper never runs its own check, but the occlusion diagnostic still
+    # slices with these values (numpy would silently clamp an oversized region).
+    check_tv_geometry(tuple(args.tv_size), tuple(args.tv_position), args.tv_refresh_every)
 
     batch_size = args.num_envs * args.num_steps
     minibatch_size = batch_size // args.num_minibatches
@@ -381,10 +396,9 @@ def train():
     global_step = 0
 
     if args.resume:
-        start_iteration, global_step, ckpt_args = _load_checkpoint(
-            args.resume, agent, rnd_model, optimizer, obs_rms, reward_rms, reward_filter
+        start_iteration, global_step = _load_checkpoint(
+            args.resume, agent, rnd_model, optimizer, obs_rms, reward_rms, reward_filter, args
         )
-        check_tv_args_match(ckpt_args, args)
         start_iteration += 1
         print(f"Resumed from {args.resume} at iteration {start_iteration - 1}, global_step={global_step}")
 
@@ -440,8 +454,7 @@ def train():
             last_frames = next_obs_np[:, 3:4, :, :].astype(np.float32)  # (N, 1, 84, 84)
             rnd_obs = _normalize_obs(last_frames, obs_rms, device)
             with torch.no_grad():
-                pred, tgt = rnd_model(rnd_obs)
-                intr_buf[step] = ((tgt - pred).pow(2).sum(1) / 2).flatten()
+                intr_buf[step] = _rnd_error(rnd_model, rnd_obs).flatten()
 
             if overlay_recorder is not None:
                 raw0 = float(intr_buf[step, 0].item())
@@ -525,25 +538,21 @@ def train():
         rnd_obs_batch = _normalize_obs(newest_np, obs_rms, device)
 
         # ── TV occlusion diagnostic ─────────────────────────────────────────
-        # Second no-grad pass with the patch region mean-imputed (~0 after
-        # normalization), against a "full" pass from the same batch, predictor
-        # state and post-update obs_rms — the step-wise raw_intrinsic_rew_mean
-        # uses the *previous* iteration's obs_rms, so it can't serve as the
-        # full-input reference here. Mean imputation is off-distribution for
-        # the predictor, so read tv_intrinsic_share as a trend, not an exact
-        # decomposition.
+        # Second no-grad pass with the patch region occluded, against a "full"
+        # pass from the same batch, predictor state and post-update obs_rms —
+        # the step-wise raw_intrinsic_rew_mean uses the *previous* iteration's
+        # obs_rms, so it can't serve as the full-input reference here. Zeroing
+        # the normalized region IS mean-imputation ((mean − mean)/std == 0)
+        # without copying and re-normalizing the batch on the CPU. Occlusion is
+        # off-distribution for the predictor, so read tv_intrinsic_share as a
+        # trend, not an exact decomposition.
         if args.tv_diag_interval > 0 and iteration % args.tv_diag_interval == 0:
-            tv_r, tv_c = args.tv_position
-            tv_h, tv_w = args.tv_size
-            occl_np = newest_np.copy()
-            occl_np[:, :, tv_r : tv_r + tv_h, tv_c : tv_c + tv_w] = \
-                obs_rms.mean[:, :, tv_r : tv_r + tv_h, tv_c : tv_c + tv_w].astype(np.float32)
-            rnd_obs_occl = _normalize_obs(occl_np, obs_rms, device)
+            rs, cs = tv_region_slices(tuple(args.tv_position), tuple(args.tv_size))
+            rnd_obs_occl = rnd_obs_batch.clone()
+            rnd_obs_occl[:, :, rs, cs] = 0.0
             with torch.no_grad():
-                pred_f, tgt_f = rnd_model(rnd_obs_batch)
-                full_diag = ((tgt_f - pred_f).pow(2).sum(1) / 2).mean().item()
-                pred_o, tgt_o = rnd_model(rnd_obs_occl)
-                occluded = ((tgt_o - pred_o).pow(2).sum(1) / 2).mean().item()
+                full_diag = _rnd_error(rnd_model, rnd_obs_batch).mean().item()
+                occluded = _rnd_error(rnd_model, rnd_obs_occl).mean().item()
             writer.add_scalar("charts/intrinsic_rew_full_diag", full_diag, global_step)
             writer.add_scalar("charts/intrinsic_rew_occluded", occluded, global_step)
             writer.add_scalar("charts/tv_intrinsic_share",
@@ -614,9 +623,10 @@ def train():
         writer.add_scalar("charts/ext_value_mean",          ext_val_buf.mean().item(),               global_step)
         writer.add_scalar("charts/int_value_mean",          int_val_buf.mean().item(),               global_step)
         if args.tv_mode in ("remote", "sham-remote"):
-            # Behavioral-capture metric: fraction of chosen actions that press the
-            # TV remote (the highest action index). Uniform-policy chance = 1/n.
-            tv_frac = (act_buf == float(action_space_n - 1)).float().mean().item()
+            # Behavioral-capture metric: fraction of chosen actions that press
+            # the TV remote. Uniform-policy chance = 1/n.
+            tv_action = NoisyTVWrapper.remote_action_index(action_space_n)
+            tv_frac = (act_buf == float(tv_action)).float().mean().item()
             writer.add_scalar("charts/tv_action_frac",      tv_frac,                                 global_step)
         writer.add_scalar("losses/value_loss",              v_loss.item(),                           global_step)
         writer.add_scalar("losses/ext_v_loss",              ext_v_loss.item(),                       global_step)

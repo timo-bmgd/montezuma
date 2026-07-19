@@ -43,14 +43,16 @@
 # --tv-* flags differ from the checkpoint's, since remote and sham-remote
 # load into identical network shapes and would otherwise swap silently).
 #
-# Usage:
-#   mkdir -p slurm-logs
+# Usage (submit from the project root -- #SBATCH --output and PROJECT_DIR
+# both assume it; slurm-logs/ is committed to the repo so it always exists):
 #   sbatch --export=ALL,SEED=1,TV_MODE=remote slurm/run_rnd_tv.slurm
 #   sbatch --export=ALL,SEED=2,TV_MODE=remote slurm/run_rnd_tv.slurm
 #   sbatch --export=ALL,SEED=1,TV_MODE=off slurm/run_rnd_tv.slurm
 #   ...
 # To extend a walltime-truncated run:
 #   sbatch --export=ALL,SEED=1,TV_MODE=remote,RESUME_FROM=$SCRATCH/montezuma/checkpoints/<run_name>/ckpt_XXXXXX.pt slurm/run_rnd_tv.slurm
+
+set -eo pipefail
 
 module purge
 module load python/3.11
@@ -59,22 +61,25 @@ module load cuda/12.4
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 
-if [ -z "$TV_MODE" ]; then
+if [ -z "${TV_MODE:-}" ]; then
     echo "ERROR: TV_MODE must be set (off|static|remote|sham-remote)" >&2
     exit 1
 fi
 
-PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# sbatch executes a spooled COPY of this script, so $0 cannot locate the repo.
+# SLURM_SUBMIT_DIR is the directory sbatch was invoked from (the project root,
+# per the usage above); the $0 fallback covers direct `bash slurm/...` runs.
+PROJECT_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 source "$PROJECT_DIR/.venv/bin/activate"
 
 SCRATCH="${SCRATCH:-/scratch/$USER}/montezuma"
-mkdir -p "$SCRATCH"/{runs,checkpoints,slurm-logs}
+mkdir -p "$SCRATCH"/{runs,checkpoints}
 
 # Fail fast if GPU is not available
 python -c "import torch; assert torch.cuda.is_available(), 'No GPU detected!'; print('GPU:', torch.cuda.get_device_name(0))"
 
 RESUME_ARGS=()
-if [ -n "$RESUME_FROM" ]; then
+if [ -n "${RESUME_FROM:-}" ]; then
     RESUME_ARGS=(--resume "$RESUME_FROM")
 fi
 

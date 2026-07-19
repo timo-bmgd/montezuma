@@ -24,7 +24,8 @@ from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from agents.base import NatureCNN, check_tv_args_match, layer_init, make_env
+from agents.base import (NatureCNN, NoisyTVWrapper, check_tv_args_match,
+                         check_tv_geometry, layer_init, make_env)
 
 
 def parse_args():
@@ -133,15 +134,22 @@ def _save_checkpoint(path, iteration, global_step, agent, optimizer, args):
     }, path)
 
 
-def _load_checkpoint(path, agent, optimizer):
+def _load_checkpoint(path, agent, optimizer, args):
     ckpt = torch.load(path, weights_only=False)
+    # Guard BEFORE restoring any state: an action-space-changing tv mismatch
+    # would otherwise die in load_state_dict with a raw shape error instead of
+    # the guard's actionable message.
+    check_tv_args_match(ckpt["args"], args)
     agent.load_state_dict(ckpt["agent_state_dict"])
     optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-    return ckpt["iteration"], ckpt["global_step"], ckpt["args"]
+    return ckpt["iteration"], ckpt["global_step"]
 
 
 def train():
     args = parse_args()
+    # Fail fast on invalid TV geometry in every mode (with --tv-mode off the
+    # wrapper never runs its own check).
+    check_tv_geometry(tuple(args.tv_size), tuple(args.tv_position), args.tv_refresh_every)
 
     batch_size = args.num_envs * args.num_steps
     minibatch_size = batch_size // args.num_minibatches
@@ -199,8 +207,7 @@ def train():
     global_step = 0
 
     if args.resume:
-        start_iteration, global_step, ckpt_args = _load_checkpoint(args.resume, agent, optimizer)
-        check_tv_args_match(ckpt_args, args)
+        start_iteration, global_step = _load_checkpoint(args.resume, agent, optimizer, args)
         start_iteration += 1
         print(f"Resumed from {args.resume} at iteration {start_iteration - 1}, global_step={global_step}")
 
@@ -318,9 +325,10 @@ def train():
         writer.add_scalar("charts/learning_rate",     optimizer.param_groups[0]["lr"], global_step)
         writer.add_scalar("charts/SPS",               sps,                             global_step)
         if args.tv_mode in ("remote", "sham-remote"):
-            # Behavioral-capture metric: fraction of chosen actions that press the
-            # TV remote (the highest action index). Uniform-policy chance = 1/n.
-            tv_frac = (act_buf == float(action_space_n - 1)).float().mean().item()
+            # Behavioral-capture metric: fraction of chosen actions that press
+            # the TV remote. Uniform-policy chance = 1/n.
+            tv_action = NoisyTVWrapper.remote_action_index(action_space_n)
+            tv_frac = (act_buf == float(tv_action)).float().mean().item()
             writer.add_scalar("charts/tv_action_frac", tv_frac,                        global_step)
         writer.add_scalar("losses/value_loss",        v_loss.item(),                   global_step)
         writer.add_scalar("losses/policy_loss",       pg_loss.item(),                  global_step)

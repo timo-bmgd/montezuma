@@ -167,21 +167,29 @@ class NoisyTVWrapper(gym.Wrapper):
                  position: tuple[int, int] = (0, 0), refresh_every: int = 1):
         super().__init__(env)
         assert mode in ("static", "remote", "sham-remote"), f"unknown tv mode {mode!r}"
-        row, col = position
-        ph, pw = size
-        h, w = env.observation_space.shape  # (84, 84) after AtariPreprocessing
-        assert 0 <= row and row + ph <= h and 0 <= col and col + pw <= w, \
-            f"TV patch {ph}x{pw} at {position} exceeds the {h}x{w} frame"
+        check_tv_geometry(size, position, refresh_every, env.observation_space.shape)
         self.mode = mode
-        self.size = (ph, pw)
-        self.position = (row, col)
+        self.size = tuple(size)
+        self.position = tuple(position)
         self.refresh_every = refresh_every
+        self._region = tv_region_slices(self.position, self.size)
         self._rng: np.random.Generator | None = None
         self._patch: np.ndarray | None = None
+        self._patch_up: np.ndarray | None = None  # render-size cache, invalidated on resample
         self._steps = 0
         if mode in ("remote", "sham-remote"):
             self.tv_action = env.action_space.n
             self.action_space = gym.spaces.Discrete(env.action_space.n + 1)
+
+    @staticmethod
+    def remote_action_index(action_space_n: int) -> int:
+        """The remote is always the LAST action of the extended space.
+
+        Single anchor for the convention that `tv_action = base action count`;
+        the agents' tv_action_frac metric derives the index through this
+        instead of re-deriving `n - 1` by convention.
+        """
+        return action_space_n - 1
 
     def reset(self, *, seed=None, options=None):
         obs, info = super().reset(seed=seed, options=options)
@@ -191,7 +199,7 @@ class NoisyTVWrapper(gym.Wrapper):
             self._rng = np.random.default_rng()
         self._steps = 0
         if self.mode != "sham-remote":
-            self._patch = self._sample_patch()
+            self._resample()
             self._stamp(obs)
         return obs, info
 
@@ -208,18 +216,18 @@ class NoisyTVWrapper(gym.Wrapper):
         obs, reward, terminated, truncated, info = super().step(env_action)
         if self.mode != "sham-remote":
             if pressed:
-                self._patch = self._sample_patch()
+                self._resample()
             self._stamp(obs)
         return obs, reward, terminated, truncated, info
 
-    def _sample_patch(self) -> np.ndarray:
-        return self._rng.integers(0, 256, size=self.size, dtype=np.uint8)
+    def _resample(self) -> None:
+        self._patch = self._rng.integers(0, 256, size=self.size, dtype=np.uint8)
+        self._patch_up = None
 
     def _stamp(self, obs: np.ndarray) -> None:
         # In-place is safe: AtariPreprocessing returns a freshly allocated
         # cv2.resize output per call, never a shared buffer.
-        row, col = self.position
-        obs[row : row + self.size[0], col : col + self.size[1]] = self._patch
+        obs[self._region] = self._patch
 
     def render(self):
         frame = self.env.render()
@@ -230,16 +238,45 @@ class NoisyTVWrapper(gym.Wrapper):
         fh, fw = frame.shape[:2]
         r0, r1 = round(row * fh / h), round((row + self.size[0]) * fh / h)
         c0, c1 = round(col * fw / w), round((col + self.size[1]) * fw / w)
-        up = cv2.resize(self._patch, (c1 - c0, r1 - r0), interpolation=cv2.INTER_NEAREST)
+        if self._patch_up is None:
+            self._patch_up = cv2.resize(self._patch, (c1 - c0, r1 - r0),
+                                        interpolation=cv2.INTER_NEAREST)
         # Copy before compositing: NewRoomRecorder buffers rendered frames for a
         # whole episode, so mutating the returned frame could rewrite history.
         frame = frame.copy()
-        frame[r0:r1, c0:c1] = up[..., None]  # gray → broadcast over RGB
+        frame[r0:r1, c0:c1] = self._patch_up[..., None]  # gray → broadcast over RGB
         return frame
 
 
-_TV_ARG_DEFAULTS = {"tv_mode": "off", "tv_size": (12, 84), "tv_position": (0, 0),
-                    "tv_refresh_every": 1}
+def check_tv_geometry(size, position, refresh_every, frame_shape=(84, 84)) -> None:
+    """Validate --tv-* geometry, raising ValueError with a clear message.
+
+    Called by NoisyTVWrapper on construction AND by each agent at startup, so
+    invalid geometry also fails fast with --tv-mode off — where the wrapper
+    never runs but rnd.py's occlusion diagnostic still slices with these values
+    (numpy would otherwise silently clamp an out-of-range region).
+    """
+    ph, pw = size
+    row, col = position
+    h, w = frame_shape
+    if ph < 1 or pw < 1:
+        raise ValueError(f"TV patch size must be positive, got {ph}x{pw}")
+    if row < 0 or col < 0 or row + ph > h or col + pw > w:
+        raise ValueError(f"TV patch {ph}x{pw} at ({row}, {col}) exceeds the {h}x{w} frame")
+    if refresh_every < 1:
+        raise ValueError(f"--tv-refresh-every must be >= 1, got {refresh_every}")
+
+
+def tv_region_slices(position, size):
+    """The (row, col) slice pair selecting the patch region of an 84x84 frame.
+
+    Single source for the position+size → region arithmetic, shared by
+    NoisyTVWrapper._stamp, rnd.py's occlusion diagnostic, and
+    scripts/check_noisy_tv.py.
+    """
+    row, col = position
+    ph, pw = size
+    return slice(row, row + ph), slice(col, col + pw)
 
 
 def check_tv_args_match(ckpt_args: dict, args) -> None:
@@ -247,20 +284,37 @@ def check_tv_args_match(ckpt_args: dict, args) -> None:
 
     remote and sham-remote load into identical network shapes (same extended
     action space), so a wrong-mode resume would load cleanly and silently
-    change the experiment mid-run. Checkpoints predating the TV feature carry
-    no tv_* keys and are treated as tv_mode="off".
+    change the experiment mid-run. Must run BEFORE any state_dict is restored
+    so every mismatch gets this message instead of a raw shape error.
+
+    tv_mode is compared first; checkpoints predating the TV feature carry no
+    tv_* keys and count as tv_mode="off". When both sides are "off" the
+    geometry flags are inert (no wrapper is constructed) and deliberately not
+    compared. Otherwise every tv_* arg except the logging-only
+    tv_diag_interval is compared — the key set is derived from the live args,
+    so future tv flags are covered without maintaining a parallel list.
     """
-    for name, default in _TV_ARG_DEFAULTS.items():
-        old, new = ckpt_args.get(name, default), getattr(args, name)
+    def _abort(name, old, new):
+        raise SystemExit(
+            f"--resume checkpoint was trained with --{name.replace('_', '-')}={old} "
+            f"but this invocation sets {new}; a mismatched resume silently changes "
+            f"the experiment. Pass the checkpoint's own --tv-* flags."
+        )
+
+    old_mode = ckpt_args.get("tv_mode", "off")
+    if old_mode != args.tv_mode:
+        _abort("tv_mode", old_mode, args.tv_mode)
+    if args.tv_mode == "off":
+        return
+    for name, new in sorted(vars(args).items()):
+        if not name.startswith("tv_") or name in ("tv_mode", "tv_diag_interval"):
+            continue
+        old = ckpt_args.get(name)
         if isinstance(old, (list, tuple)) or isinstance(new, (list, tuple)):
             old = tuple(old) if isinstance(old, (list, tuple)) else (old,)
             new = tuple(new) if isinstance(new, (list, tuple)) else (new,)
         if old != new:
-            raise SystemExit(
-                f"--resume checkpoint was trained with --{name.replace('_', '-')}={old} "
-                f"but this invocation sets {new}; a mismatched resume silently changes "
-                f"the experiment. Pass the checkpoint's own --tv-* flags."
-            )
+            _abort(name, old, new)
 
 
 def make_env(
