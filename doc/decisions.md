@@ -208,3 +208,101 @@ paper-default hyperparameters would confirm the collapse persists independent
 of `ent_coef`, pointing back at the still-open `AutoresetMode.NEXT_STEP`
 GAE-masking bug (documented above, explicitly out of scope for this round of
 changes) as the next lever, not more compute.
+
+---
+
+## 2026-07-19 — Noisy-TV experiment feature (`--tv-mode`, the thesis's main experiment)
+
+**Change:** Added `NoisyTVWrapper` to `base.py` and `--tv-*` flags to `rnd.py`
+and `ppo.py` — a synthetic stochastic patch ("noisy TV") injected into
+observations, with an action-triggered `remote` mode as the primary thesis
+condition. Full design and experiment matrix: `doc/noisy-tv-experiment.md`.
+Non-obvious calls made, and why:
+
+- **Injection point is *forced*, not just chosen:** the wrapper sits between
+  `AtariPreprocessing` and `FrameStackObservation` because `AtariPreprocessing`
+  never consumes the wrapped env's observations — it calls
+  `ale.getScreenGrayscale` directly into internal buffers, so a raw-frame
+  observation wrapper below it has no effect on the processed obs. Injecting
+  at 84×84 also gives exactly one noise sample per agent step, with no
+  max-pool/INTER_AREA attenuation of the noise statistics.
+- **`remote` over `static` as the primary condition:** a screen-fixed,
+  unavoidable patch cannot produce *behavioral* capture — only signal
+  degradation. The paper's thought experiment is about agent-controllable
+  stochasticity, so the primary condition adds a 19th NOOP-mapped action that
+  resamples the patch, with `sham-remote` (extra action, no patch) as the
+  action-space-matched control. Montezuma's minimal set is all 18 actions, so
+  there is no free action to overload; extending is cheap because nothing
+  hardcodes 18 (actor head and auto-stop both read `single_action_space.n`).
+- **Sticky-action asymmetry (methodology note):** ALE's 0.25 sticky actions
+  apply to the *executed* action, but the patch resample triggers on the
+  *chosen* action pre-mapping — the TV remote is the only perfectly reliable
+  action in the game. Favorable to the hypothesis; disclose in the thesis.
+- **NEXT_STEP autoreset interaction:** on the boundary step, vector envs call
+  the sub-env's `reset()` and never `step()` (verified in gymnasium 1.3.0
+  source), so the discarded boundary action can't resample the patch. Instead
+  every episode start draws a fresh patch (wrapper `reset()`), identical
+  across TV conditions. The known GAE-masking bug (2026-07-13 entry) is
+  unaffected — the wrapper changes neither rewards nor done flags.
+- **TV RNG is not checkpointed:** noise is iid per resample and the RNG is
+  derived from the per-sub-env reset seed, so a `--resume` replays the start
+  of the noise stream — distributionally identical, and ALE state isn't
+  checkpointed either. Instead of RNG checkpointing, `--resume` now *aborts on
+  mismatched `--tv-*` flags* (`check_tv_args_match` in `base.py`): `remote`
+  and `sham-remote` load into identical network shapes, so a wrong-mode resume
+  would otherwise silently swap the experiment mid-run.
+- **Auto-stop is effectively neutralized in patched RND runs, by design:** a
+  working TV keeps `raw_intrinsic_rew_mean` elevated, so the ≥10x
+  intrinsic-drop conjunct never holds. That's correct behavior — it also means
+  auto-stop cannot fire *spuriously* in a captured run (entropy collapsed onto
+  the TV action, KL/clipfrac ≈ 0, but intrinsic still high). `off`/`sham-remote`
+  runs keep the full baseline guard.
+- **Occlusion diagnostic logs its own "full" value**
+  (`charts/intrinsic_rew_full_diag`) rather than reusing
+  `charts/raw_intrinsic_rew_mean`: the step-wise metric is computed with the
+  *previous* iteration's `obs_rms`, the diagnostic with the post-update one —
+  comparing across normalizers would confound `charts/tv_intrinsic_share`.
+- **Byte-identical-when-off is verified by hash, not by training runs:**
+  `scripts/check_noisy_tv.py --hash-off` hashes a 500-step fixed-action
+  trajectory; it matched exactly between pre-TV `main` and the feature branch.
+  Full training runs can't verify this because the obs-norm init loop's
+  `envs.action_space.sample()` uses the space's own entropy-seeded RNG and was
+  already nondeterministic across runs (pre-existing; a one-line
+  `envs.action_space.seed(args.seed)` would fix it if full-run determinism is
+  ever wanted — out of scope here).
+- **Patch geometry was corrected by the smoke test: default is the full
+  12×84 HUD strip, not a 12×12 corner.** The first smoke run (200k steps,
+  12×12 patch at the top-right HUD corner) showed `tv_intrinsic_share` ≈ 0 —
+  occluding the patch didn't change prediction error. A checkpoint probe
+  found why, and it's mechanical, not a pipeline bug: the noise *was* in the
+  RND input, correctly normalized (region std ≈ 1.01 post-obs_rms), but fully
+  re-randomizing a 144-pixel patch (2% of the frame) moves the random target
+  network's output by only ~7% per-dim ≈ ~1% of total prediction error.
+  Since per-pixel obs_rms normalization standardizes *any* stationary noise
+  distribution to ~unit variance, amplitude is not a usable lever — **area
+  is the only stimulus-strength knob**, and the playfield boundary (rows ≥12
+  in every room) caps safe height at 12 rows. Hence `--tv-size` became
+  `H W` (default `12 84` at `0 0`): 1008 px, 7× the area, covering the
+  score/lives display (HUD, not gameplay; score-change pixel novelty gets
+  masked in TV runs but not baselines — negligible at Montezuma's scoring
+  frequency, disclosed in `doc/noisy-tv-experiment.md`).
+- **Pre-existing CPU-only logging quirk found while probing (not fixed
+  here):** on CPU, `intr_buf.cpu().numpy()` returns a *view*, so the later
+  in-place `intr_buf /= sqrt(reward_rms.var)` retroactively rewrites
+  `curiosity_np` — `charts/raw_intrinsic_rew_mean` then logs the
+  *normalized* value (observed: ~0.08 while the true raw error was ~65 with
+  `sqrt(reward_rms.var)` ≈ 808). CUDA runs are unaffected (`.cpu()` copies),
+  so all production/GPU numbers in prior docs remain valid; only local
+  `--sync-envs` CPU smoke runs mislabel this one chart. Fix would be a
+  one-line `.copy()`; left untouched in this round to keep the TV diff
+  behavior-preserving (the hash check pins the off-path byte-identical).
+- **Cosmetic:** the `--overlay-video` bar meter's `main_metric_range=(0, 0.3)`
+  was calibrated against collapsing baselines; in TV runs normalized intrinsic
+  sits near ~1 and the bar pins full. Left unchanged so baseline overlays stay
+  comparable.
+
+**How to apply / re-evaluate:** run the matrix in `doc/noisy-tv-experiment.md`
+via `slurm/run_rnd_tv.slurm` / `run_ppo_tv.slurm`. Before any production
+submission, `scripts/check_noisy_tv.py` must pass, and smoke expectations are
+listed in that doc. The capture verdict rests on `charts/tv_action_frac`
+(remote ≫ 1/19, sham ≈ 1/19) plus `charts/tv_intrinsic_share`.

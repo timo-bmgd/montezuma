@@ -1,3 +1,4 @@
+import cv2
 import gymnasium as gym
 import ale_py
 import numpy as np
@@ -127,6 +128,141 @@ class OverlayFrameProbe(gym.Wrapper):
         return self.render() if self._active else None
 
 
+class NoisyTVWrapper(gym.Wrapper):
+    """Injects a synthetic "noisy TV" — a rectangular patch of per-pixel uniform
+    noise — into the processed 84x84 observation, to test whether intrinsic-motivation
+    agents get captured by agent-irrelevant stochasticity (the noisy-TV thought
+    experiment of Burda et al. 2018).
+
+    Must sit between AtariPreprocessing and FrameStackObservation:
+    AtariPreprocessing reads the screen directly from the ALE object
+    (getScreenGrayscale into internal buffers), so a wrapper below it never
+    influences the processed frames, and stamping here gives exactly one noise
+    sample per agent step (no frameskip max-pool / resize attenuation) with
+    per-step noise history preserved across the frame stack.
+
+    Modes:
+      static      — always-on patch, resampled every `refresh_every` agent steps.
+                    No behavioral trap (the patch is screen-fixed and unavoidable);
+                    tests intrinsic-signal degradation only.
+      remote      — action space grows by one: the added action maps to NOOP(0)
+                    in the game and resamples the patch ("pressing the TV
+                    remote"). Agent-controllable stochasticity — the paper's
+                    actual thought experiment, and the mode where capture is
+                    observable as behavior.
+      sham-remote — the added NOOP-mapped action but NO patch: the
+                    action-space-matched control for remote.
+
+    The noise RNG is derived from the per-sub-env reset seed (salted so it is
+    decorrelated from the env's own RNG) and persists across autoresets, so
+    noise streams are reproducible per seed. A fresh patch is drawn on every
+    episode start. render() composites the current patch (nearest-neighbour
+    upscaled to raw-frame coordinates) onto a copy of the rendered frame so the
+    TV is visible in RecordVideo / NewRoomRecorder / overlay output.
+    """
+
+    _RNG_SALT = 0x7F00D
+
+    def __init__(self, env: gym.Env, mode: str, size: tuple[int, int] = (12, 84),
+                 position: tuple[int, int] = (0, 0), refresh_every: int = 1):
+        super().__init__(env)
+        assert mode in ("static", "remote", "sham-remote"), f"unknown tv mode {mode!r}"
+        row, col = position
+        ph, pw = size
+        h, w = env.observation_space.shape  # (84, 84) after AtariPreprocessing
+        assert 0 <= row and row + ph <= h and 0 <= col and col + pw <= w, \
+            f"TV patch {ph}x{pw} at {position} exceeds the {h}x{w} frame"
+        self.mode = mode
+        self.size = (ph, pw)
+        self.position = (row, col)
+        self.refresh_every = refresh_every
+        self._rng: np.random.Generator | None = None
+        self._patch: np.ndarray | None = None
+        self._steps = 0
+        if mode in ("remote", "sham-remote"):
+            self.tv_action = env.action_space.n
+            self.action_space = gym.spaces.Discrete(env.action_space.n + 1)
+
+    def reset(self, *, seed=None, options=None):
+        obs, info = super().reset(seed=seed, options=options)
+        if seed is not None:
+            self._rng = np.random.default_rng([seed, self._RNG_SALT])
+        elif self._rng is None:
+            self._rng = np.random.default_rng()
+        self._steps = 0
+        if self.mode != "sham-remote":
+            self._patch = self._sample_patch()
+            self._stamp(obs)
+        return obs, info
+
+    def step(self, action):
+        if self.mode in ("remote", "sham-remote"):
+            # Resample on the *chosen* action, before ALE's sticky-action lottery:
+            # the remote is the one perfectly reliable action in the game.
+            pressed = action == self.tv_action
+            env_action = 0 if pressed else action  # 0 = NOOP in ALE's action set
+        else:
+            self._steps += 1
+            pressed = self._steps % self.refresh_every == 0
+            env_action = action
+        obs, reward, terminated, truncated, info = super().step(env_action)
+        if self.mode != "sham-remote":
+            if pressed:
+                self._patch = self._sample_patch()
+            self._stamp(obs)
+        return obs, reward, terminated, truncated, info
+
+    def _sample_patch(self) -> np.ndarray:
+        return self._rng.integers(0, 256, size=self.size, dtype=np.uint8)
+
+    def _stamp(self, obs: np.ndarray) -> None:
+        # In-place is safe: AtariPreprocessing returns a freshly allocated
+        # cv2.resize output per call, never a shared buffer.
+        row, col = self.position
+        obs[row : row + self.size[0], col : col + self.size[1]] = self._patch
+
+    def render(self):
+        frame = self.env.render()
+        if frame is None or self._patch is None:
+            return frame
+        row, col = self.position
+        h, w = self.observation_space.shape
+        fh, fw = frame.shape[:2]
+        r0, r1 = round(row * fh / h), round((row + self.size[0]) * fh / h)
+        c0, c1 = round(col * fw / w), round((col + self.size[1]) * fw / w)
+        up = cv2.resize(self._patch, (c1 - c0, r1 - r0), interpolation=cv2.INTER_NEAREST)
+        # Copy before compositing: NewRoomRecorder buffers rendered frames for a
+        # whole episode, so mutating the returned frame could rewrite history.
+        frame = frame.copy()
+        frame[r0:r1, c0:c1] = up[..., None]  # gray → broadcast over RGB
+        return frame
+
+
+_TV_ARG_DEFAULTS = {"tv_mode": "off", "tv_size": (12, 84), "tv_position": (0, 0),
+                    "tv_refresh_every": 1}
+
+
+def check_tv_args_match(ckpt_args: dict, args) -> None:
+    """Abort a --resume whose --tv-* flags differ from the checkpoint's.
+
+    remote and sham-remote load into identical network shapes (same extended
+    action space), so a wrong-mode resume would load cleanly and silently
+    change the experiment mid-run. Checkpoints predating the TV feature carry
+    no tv_* keys and are treated as tv_mode="off".
+    """
+    for name, default in _TV_ARG_DEFAULTS.items():
+        old, new = ckpt_args.get(name, default), getattr(args, name)
+        if isinstance(old, (list, tuple)) or isinstance(new, (list, tuple)):
+            old = tuple(old) if isinstance(old, (list, tuple)) else (old,)
+            new = tuple(new) if isinstance(new, (list, tuple)) else (new,)
+        if old != new:
+            raise SystemExit(
+                f"--resume checkpoint was trained with --{name.replace('_', '-')}={old} "
+                f"but this invocation sets {new}; a mismatched resume silently changes "
+                f"the experiment. Pass the checkpoint's own --tv-* flags."
+            )
+
+
 def make_env(
     env_id: str,
     idx: int,
@@ -137,18 +273,28 @@ def make_env(
     record_room_discovery: bool = False,
     clip_reward: bool = True,
     overlay_video: bool = False,
+    tv_mode: str = "off",
+    tv_size: tuple[int, int] = (12, 84),
+    tv_position: tuple[int, int] = (0, 0),
+    tv_refresh_every: int = 1,
 ):
     """Returns a thunk for gym.vector.AsyncVectorEnv (or SyncVectorEnv).
 
     Wrapper stack (inner → outer):
-      ALE env → RoomTracker → AtariPreprocessing → FrameStackObservation
-        → RecordEpisodeStatistics → [ClipReward]
+      ALE env → RoomTracker → AtariPreprocessing → [NoisyTVWrapper]
+        → FrameStackObservation → RecordEpisodeStatistics → [ClipReward]
         → [OverlayFrameProbe for idx 0 when overlay_video]
         → [RecordVideo for idx 0 when capture_video] → [NewRoomRecorder on top when record_room_discovery]
 
     overlay_video and capture_video are mutually exclusive (enforced by each
     agent's train() at the CLI level, not here) -- overlay_video takes priority
     if both are somehow set.
+
+    NoisyTVWrapper (tv_mode != "off") is added to *every* sub-env, not just
+    idx 0: vector envs require homogeneous spaces (remote/sham-remote extend
+    the action space) and the TV must exist in every env's observations. With
+    tv_mode="off" the wrapper is not constructed at all, keeping the default
+    stack byte-identical to the pre-TV code path.
 
     terminal_on_life_loss=False so the agent experiences full episodes —
     important for exploration research where we want to reward reaching new rooms,
@@ -173,6 +319,9 @@ def make_env(
             grayscale_obs=True,
             terminal_on_life_loss=False,
         )
+        if tv_mode != "off":
+            env = NoisyTVWrapper(env, mode=tv_mode, size=tuple(tv_size),
+                                 position=tuple(tv_position), refresh_every=tv_refresh_every)
         env = FrameStackObservation(env, 4)
         env = RecordEpisodeStatistics(env)
         if clip_reward:
