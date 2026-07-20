@@ -140,6 +140,15 @@ message, or the first fix was an incomplete diagnosis later refined — and is r
 than smoothed over, since it is a legitimate example of the debugging process a thesis methodology
 section can be honest about.
 
+**Correction (2026-07-20).** The open question above is now resolved empirically: `--sync-envs`
+was the *incomplete diagnosis*. With `numpy<2` pinned, `AsyncVectorEnv` runs cleanly on JupyterHub
+(verified with a 32-env async run — `Using device: cuda`, no error), so the `RuntimeError: Numpy is
+not available` was purely the NumPy-2.x / `ale-py` ABI mismatch fixed in `8d4ac6c`, never a
+multiprocessing limitation; `7d6c910` mis-attributed it. `--sync-envs` is therefore **not** required
+on JupyterHub — it is now documented as an optional, slower single-process fallback, and CLAUDE.md +
+both notebooks default to async. The platform divergence described next is correspondingly smaller:
+JupyterHub can run `AsyncVectorEnv` too; only the `gymnasium`/`numpy` version pins still differ.
+
 **Resulting platform divergence.** By the end of Stage 3, JupyterHub and HPC/SLURM run against
 different pinned dependency versions (JupyterHub: `gymnasium==1.1.1`, `numpy<2`, forced
 `SyncVectorEnv`; HPC: `gymnasium==1.3.0`, `numpy==2.4.4`, `AsyncVectorEnv`) — a deliberate,
