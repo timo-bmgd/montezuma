@@ -33,7 +33,8 @@ from torch.utils.tensorboard import SummaryWriter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from agents.base import (NoisyTVWrapper, check_tv_args_match, check_tv_geometry,
-                         layer_init, make_env, tv_region_slices)
+                         compute_gae, layer_init, make_env, masked_mean,
+                         tv_region_slices)
 
 
 def parse_args():
@@ -495,29 +496,20 @@ def train():
         intr_buf /= np.sqrt(reward_rms.var)
 
         # ── dual GAE ────────────────────────────────────────────────────────
+        # NEXT_STEP-autoreset-correct GAE (see agents.base.compute_gae): the
+        # discarded-action reset step (done_buf[t]==1) is walled off in both streams.
+        # Extrinsic is episodic; intrinsic is non-episodic (RND) so it never cuts the
+        # bootstrap at episode boundaries -- but the wall still stops the fake terminal
+        # frame from bridging two episodes' intrinsic returns.
         with torch.no_grad():
             next_ext_val, next_int_val = agent.get_value(next_obs)
             next_ext_val = next_ext_val.reshape(1, -1)
             next_int_val = next_int_val.reshape(1, -1)
 
-            ext_adv = torch.zeros_like(rew_buf, device=device)
-            int_adv = torch.zeros_like(intr_buf, device=device)
-            ext_gaelam = 0
-            int_gaelam = 0
-            for t in reversed(range(args.num_steps)):
-                if t == args.num_steps - 1:
-                    ext_nonterminal = 1.0 - next_done
-                    ext_nextval = next_ext_val
-                    int_nextval = next_int_val
-                else:
-                    ext_nonterminal = 1.0 - done_buf[t + 1]
-                    ext_nextval = ext_val_buf[t + 1]
-                    int_nextval = int_val_buf[t + 1]
-                # intrinsic is non-episodic: nextnonterminal always 1
-                ext_delta = rew_buf[t] + args.gamma * ext_nextval * ext_nonterminal - ext_val_buf[t]
-                int_delta = intr_buf[t] + args.int_gamma * int_nextval - int_val_buf[t]
-                ext_adv[t] = ext_gaelam = ext_delta + args.gamma * args.gae_lambda * ext_nonterminal * ext_gaelam
-                int_adv[t] = int_gaelam = int_delta + args.int_gamma * args.gae_lambda * int_gaelam
+            ext_adv = compute_gae(rew_buf, ext_val_buf, done_buf, next_ext_val, next_done,
+                                  args.gamma, args.gae_lambda, episodic=True)
+            int_adv = compute_gae(intr_buf, int_val_buf, done_buf, next_int_val, next_done,
+                                  args.int_gamma, args.gae_lambda, episodic=False)
             ext_returns = ext_adv + ext_val_buf
             int_returns = int_adv + int_val_buf
 
@@ -531,6 +523,10 @@ def train():
         b_int_ret  = int_returns.reshape(-1)
         b_ext_val  = ext_val_buf.reshape(-1)
         b_adv      = b_int_adv * args.int_coef + b_ext_adv * args.ext_coef
+        # 1 for real steps, 0 for NEXT_STEP fake (discarded-action) steps; excludes the
+        # discarded terminal-frame action and its cross-episode value targets from the
+        # policy/value update (the RND predictor still trains on these real frames).
+        b_keep     = (1.0 - done_buf).reshape(-1)
 
         # update obs_rms with this iteration's latest frames for next training step
         newest_np = b_obs[:, 3:4, :, :].cpu().numpy().astype(np.float32)
@@ -564,9 +560,12 @@ def train():
             for start in range(0, batch_size, minibatch_size):
                 mb = mb_inds[start : start + minibatch_size]
 
+                mb_keep = b_keep[mb]  # exclude NEXT_STEP fake steps from policy/value losses
+
                 pred_feat, tgt_feat = rnd_model(rnd_obs_batch[mb])
                 fwd_loss_per = F.mse_loss(pred_feat, tgt_feat.detach(), reduction="none").mean(-1)
-                # train predictor on a random subset to avoid overfitting
+                # train predictor on a random subset to avoid overfitting (fake-step frames
+                # are real observations, so they are NOT excluded from the predictor loss)
                 mask = (torch.rand(len(fwd_loss_per), device=device) < args.update_proportion).float()
                 fwd_loss = (fwd_loss_per * mask).sum() / mask.sum().clamp(min=1)
 
@@ -577,29 +576,32 @@ def train():
                 ratio = logratio.exp()
 
                 with torch.no_grad():
-                    approx_kl = ((ratio - 1) - logratio).mean()
-                    clipfracs.append(((ratio - 1.0).abs() > args.clip_coef).float().mean().item())
+                    approx_kl = masked_mean((ratio - 1) - logratio, mb_keep)
+                    clipfracs.append(masked_mean(((ratio - 1.0).abs() > args.clip_coef).float(), mb_keep).item())
 
+                # normalise combined advantages over real (kept) samples only
                 mb_adv = b_adv[mb]
-                mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
+                adv_mean = masked_mean(mb_adv, mb_keep)
+                adv_std = torch.sqrt(masked_mean((mb_adv - adv_mean) ** 2, mb_keep) + 1e-8)
+                mb_adv = (mb_adv - adv_mean) / (adv_std + 1e-8)
 
-                pg_loss = torch.max(
+                pg_loss = masked_mean(torch.max(
                     -mb_adv * ratio,
                     -mb_adv * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef),
-                ).mean()
+                ), mb_keep)
 
                 new_ext_val = new_ext_val.view(-1)
                 new_int_val = new_int_val.view(-1)
                 ext_v_clip = b_ext_val[mb] + torch.clamp(new_ext_val - b_ext_val[mb],
                                                           -args.clip_coef, args.clip_coef)
-                ext_v_loss = 0.5 * torch.max(
+                ext_v_loss = 0.5 * masked_mean(torch.max(
                     (new_ext_val - b_ext_ret[mb]) ** 2,
                     (ext_v_clip - b_ext_ret[mb]) ** 2,
-                ).mean()
-                int_v_loss = 0.5 * ((new_int_val - b_int_ret[mb]) ** 2).mean()
+                ), mb_keep)
+                int_v_loss = 0.5 * masked_mean((new_int_val - b_int_ret[mb]) ** 2, mb_keep)
                 v_loss = ext_v_loss + int_v_loss
 
-                loss = pg_loss - args.ent_coef * entropy.mean() + v_loss * args.vf_coef + fwd_loss
+                loss = pg_loss - args.ent_coef * masked_mean(entropy, mb_keep) + v_loss * args.vf_coef + fwd_loss
 
                 optimizer.zero_grad()
                 loss.backward()

@@ -306,3 +306,59 @@ via `slurm/run_rnd_tv.slurm` / `run_ppo_tv.slurm`. Before any production
 submission, `scripts/check_noisy_tv.py` must pass, and smoke expectations are
 listed in that doc. The capture verdict rests on `charts/tv_action_frac`
 (remote ≫ 1/19, sham ≈ 1/19) plus `charts/tv_intrinsic_share`.
+
+---
+
+## 2026-07-22 — NEXT_STEP autoreset GAE-masking bug fixed
+
+**Change:** The `AutoresetMode.NEXT_STEP` GAE-masking defect flagged as "still-open"
+in the 2026-07-13 "RND vs PPO asymmetry" entry (and referenced by the 2026-07-14
+auto-stop note and the noisy-TV entry) is now fixed in all three agents
+(`ppo.py`, `count_based.py`, `rnd.py`).
+
+**Empirical confirmation (not just from the doc):** a CartPole boundary trace under the
+repo's actual gymnasium 1.3.0 `SyncVectorEnv`, mimicking each agent's exact buffer
+bookkeeping, reproduced the mechanism. At the genuine terminal step the env returns the
+**true final frame** (`terminated=1`); the *following* step **discards** the sampled
+action and returns the reset obs with `reward=0`, `terminated=0`. With
+`done_buf[t]=next_done`, that fake step is **exactly** `done_buf[t]==1` — so `done_buf`
+marks the final frame, leaving the actual reset frame unmarked one step later. CleanRL's
+`nextnonterminal = 1 - done_buf[t+1]` then bootstraps V(final frame of ep N) → V(start of
+ep N+1) at the fake step, and the discarded terminal-frame action is still fed to the
+policy gradient.
+
+**Fix (GAE/rollout masking only):**
+- New shared helper `agents.base.compute_gae(...)` walls off every fake step
+  (`done_buf[t]==1`): it carries no advantage and blocks advantage flow into earlier
+  real steps. All three agents call it (rnd twice: `episodic=True` extrinsic,
+  `episodic=False` intrinsic). For the extrinsic stream this is behaviour-preserving on
+  every kept sample (the `nextnonterminal=0` firewall at the genuine terminal step
+  already isolated the corruption to the fake step); for rnd's non-episodic intrinsic
+  stream the wall is what actually stops the fake frame bridging two episodes' returns.
+- New shared `agents.base.masked_mean(...)`; the update loops exclude fake steps from the
+  policy/value losses and from `approx_kl`/`clipfrac` (advantage normalisation is over
+  kept samples too). The RND predictor loss (`fwd_loss`) is **not** masked — the final
+  frame is a real observation, valid for novelty training. (`entropy.mean()` used for the
+  auto-stop `entropy_frac` diagnostic is left unmasked to preserve the calibrated
+  thresholds; fake steps are rare, so the shift is negligible.)
+
+**Why it is NOT expected to flip the RND-vs-PPO asymmetry:** the bug and the fix are
+identical across all three agents, so both were distorted the same way. This makes the
+matched-budget comparison *clean* — it is not a hypothesised cause of the asymmetry.
+
+**Scope:** GAE + update-loop loss masking + two `base.py` helpers only. No hyperparameter
+change; no env/wrapper change (`make_env`, the wrapper stack and `NEXT_STEP` are
+untouched, so logging/video/room-tracking are unaffected — verified: `episodic_return` /
+`rooms_visited` still log). The tempting one-liner alternative — switching the vector env
+to `AutoresetMode.SAME_STEP` — was **rejected empirically**: under `SAME_STEP`,
+`RecordEpisodeStatistics` returns episode data nested under `infos["final_info"]`
+(+`infos["_final_info"]`) instead of top-level `infos["_episode"]` (the gymnasium-0.x
+`final_info` pattern CLAUDE.md flags as broken), which would silently stop the agents'
+episode logging.
+
+**Verification:** `tests/test_gae_autoreset.py` — deterministic, no ROMs, self-runnable
+(`python tests/test_gae_autoreset.py`) or via pytest. It pins the fake-step wall, the
+terminal no-bootstrap, the intrinsic no-cross-episode-leak, the NEXT_STEP env signature,
+and includes FAIL-before guards that assert the old inline recursion was buggy. Short CPU
+smoke runs of all three agents (with real Montezuma episode boundaries) train without
+NaN/shape errors and still log episodes.
