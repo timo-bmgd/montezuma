@@ -1,0 +1,7 @@
+run,algo,tv_mode,seed,max_step,left_room1_step,max_rooms,final_return_l20,max_return,peak_intrinsic,peak_intrinsic_step,final_entropy_l20,final_tv_share_l20,final_expl_var_l20
+ppo_tv_off s1,ppo,off,1,9999360,3986430,2,0,400.0,,,2.763,,-3.332
+rnd_tv_off s1,rnd,off,1,9999213,,1,0,0.0,192.832,2688,0.503,-0.091,-6.764
+rnd_tv_off s2,rnd,off,2,9999276,6441078,2,10.0,400.0,145.341,2688,0.611,-0.198,0.626
+rnd_tv_remote s1,rnd,remote,1,9998478,,1,0,100.0,257.918,2688,0.762,0.117,-0.262
+rnd_tv_sham-remote s1,rnd,sham-remote,1,9999003,,1,0,0.0,218.954,2688,0.415,-0.063,-6.358
+rnd_tv_static s1,rnd,static,1,9998478,,1,0,0.0,234.357,2688,0.282,0.203,-0.898
