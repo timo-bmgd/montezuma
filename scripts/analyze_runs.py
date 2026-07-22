@@ -128,6 +128,41 @@ def plot_metric(runs, tag, title, ylabel, opts, colors, out):
     return path
 
 
+def plot_rooms_cummax(runs, colors, out):
+    """Monotone 'furthest room reached so far' — the useful view of exploration.
+
+    The raw charts/rooms_visited is a per-episode distinct-room count logged once
+    per episode (~20k points), so the rare episodes that reach room 2 vanish among
+    the 1s. Taking the running max over global_step turns those into a visible,
+    persistent step up.
+    """
+    have = [(d, ea) for d, ea, tags in runs if "charts/rooms_visited" in tags]
+    if not have:
+        return None
+    plt.figure(figsize=(9, 5.2))
+    for d, ea in have:
+        sc = ea.Scalars("charts/rooms_visited")
+        xs, cm, run_max = [], [], 0
+        for srec in sc:
+            run_max = max(run_max, srec.value)
+            xs.append(srec.step); cm.append(run_max)
+        c = colors[label_of(d)]
+        n2 = sum(1 for srec in sc if srec.value >= 2)
+        plt.step(xs, cm, where="post", color=c, linewidth=1.8,
+                 label=f"{label_of(d)}  (room2 in {n2} ep)")
+    plt.yticks([1, 2, 3])
+    plt.xlabel("global step")
+    plt.ylabel("furthest room reached")
+    plt.title("Furthest room reached so far (cumulative max over episodes)")
+    plt.legend(fontsize=8, loc="best")
+    plt.grid(alpha=0.25)
+    plt.tight_layout()
+    path = os.path.join(out, "charts__rooms_furthest_cummax.png")
+    plt.savefig(path, dpi=130)
+    plt.close()
+    return path
+
+
 def plot_overview(runs, colors, out):
     fig, axes = plt.subplots(2, 3, figsize=(16, 9))
     titledict = {t: (ti, opts) for t, ti, _, opts in PLOTS}
@@ -174,6 +209,8 @@ def summarize(runs):
             "max_step": max((s.step for s in (ret or rv)), default=0),
             "left_room1_step": next((s.step for s in rv if s.value >= 2), None),
             "max_rooms": int(max((s.value for s in rv), default=0)),
+            "n_episodes": len(rv),
+            "room2_episodes": sum(1 for s in rv if s.value >= 2),
             "final_return_l20": round(last_mean(ret) or 0, 1),
             "max_return": round(max((s.value for s in ret), default=0), 0),
             "peak_intrinsic": round(peak.value, 3) if peak else None,
@@ -186,8 +223,8 @@ def summarize(runs):
 
 
 def write_summary(rows, logdir):
-    cols = ["run", "algo", "tv_mode", "max_rooms", "left_room1_step", "final_return_l20",
-            "max_return", "peak_intrinsic", "peak_intrinsic_step", "final_entropy_l20",
+    cols = ["run", "tv_mode", "n_episodes", "room2_episodes", "max_rooms", "left_room1_step",
+            "final_return_l20", "max_return", "peak_intrinsic", "final_entropy_l20",
             "final_tv_share_l20", "final_expl_var_l20"]
     with open(os.path.join(logdir, "summary.csv"), "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
@@ -231,6 +268,7 @@ def main():
         p = plot_metric(runs, tag, title, ylabel, opts, colors, out)
         if p:
             made.append(p)
+    made.append(plot_rooms_cummax(runs, colors, out))
     made.append(plot_overview(runs, colors, out))
     print(f"\nwrote {len(made)} figures to {out}/")
 

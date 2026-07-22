@@ -33,7 +33,27 @@ derived-events table to `summary.md` / `summary.csv`:
 Figures produced (in `figures/`): `_overview.png` (6-panel), plus one chart per metric —
 `rooms_visited` (with ▼ markers at first exit from room 1), `episodic_return`,
 `episodic_length`, `raw_intrinsic_rew_mean`, `mean_intrinsic_rew`, `tv_intrinsic_share`,
-`tv_action_frac`, `entropy`, `explained_variance`, `approx_kl`.
+`tv_action_frac`, `entropy`, `explained_variance`, `approx_kl`, and `rooms_furthest_cummax` (cumulative furthest room reached — see note below).
+
+### ⚠️ Reading `charts/rooms_visited`
+
+`rooms_visited` is a **per-episode distinct-room count**, reset every episode
+(`RoomTracker.reset()`) and logged once per completed episode (~18k–22k points per
+run). It is *not* a cumulative "furthest room ever reached". Because the agent dies in
+room 1 in almost every episode, the raw chart sits flat at 1 — the rare room-2 episodes
+are a few needles in ~20k points and are invisible. They are still in the data:
+
+| run | episodes | reached room 2 |
+|-----|---------:|---------------:|
+| ppo_tv_off s1 | 18,888 | 2 episodes |
+| rnd_tv_off s2 | 18,244 | 6 episodes |
+| rnd_tv_off s1 / remote / sham-remote / static | 18–22k | **0 episodes** |
+
+Use `figures/charts__rooms_furthest_cummax.png` (running max over steps) to actually see
+who reached room 2 and when: `ppo` steps 1→2 at ~4.0M, `rnd_off s2` at ~6.4M, the other
+four never leave room 1. Per the logged data the four TV/remote runs never recorded a
+second room — if a room-2 visit is expected there, cross-check the room-discovery videos
+(the RAM-byte-3 tracker may have missed it).
 
 ### Interactive overlay (TensorBoard)
 
