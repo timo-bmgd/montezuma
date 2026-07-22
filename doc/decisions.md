@@ -362,3 +362,51 @@ terminal no-bootstrap, the intrinsic no-cross-episode-leak, the NEXT_STEP env si
 and includes FAIL-before guards that assert the old inline recursion was buggy. Short CPU
 smoke runs of all three agents (with real Montezuma episode boundaries) train without
 NaN/shape errors and still log episodes.
+
+---
+
+## 2026-07-22 — Matched-budget comparison configured on the fixed code
+
+**Change:** Configured (and pre-flighted, but not yet submitted — see below) one clean
+matched-budget SLURM matrix to characterize, on the `NEXT_STEP` bug-fixed code, whether
+(a) the early entropy/intrinsic collapse and (b) RND underperforming PPO survive the fix.
+This is a fixed-budget characterization, **not** a paper-scale reproduction. Full package:
+`doc/matched-budget-submission.md`.
+
+**The matrix (8 cells), matched across agents:** `{PPO, RND, count-based} × {seed 1, 2}`
+at each agent's standard `ent_coef` (PPO/count 0.01, RND 0.001), plus an **RND
+`ent_coef=0.01` ablation** (`exp_name=rnd_ent01`, seeds 1,2) to isolate whether the
+ent_coef mismatch — rather than the method — drives the RND<PPO gap.
+
+**Chosen matched knobs, with reasoning:**
+- **num_envs = 32** — already the scripts' value, in the requested 32–64 band, matches
+  `--cpus-per-task=32` 1:1; 64 needs a confirmed ≥64-core/GPU partition + V100 memory
+  headroom (not confirmable off-cluster), so 32 is the safe matched value (override
+  `NUM_ENVS=64`).
+- **total_timesteps = 3,000,000** — the cheap scale
+  `doc/rnd-vs-ppo-asymmetry-investigation.md` §4.3 calls for (not the 10M/50M the scripts
+  defaulted to, which that doc warns against); collapse historically appears <1M steps, so
+  3M answers (a) with margin and gives a first read on (b), extendable via `--resume`.
+- **anneal_lr = ON** — paper/CleanRL default, kept matched to avoid a confound; disabling
+  it is a separate lever (failure doc §6), not this matrix.
+- **auto-stop = ON** — collapsed runs exit 42 early (fast collapse yes/no, bounded cost).
+
+**Implementation:** `slurm/run_{ppo,rnd,count_based}.slurm` gained behaviour-preserving
+`--export` overrides (`NUM_ENVS`, `TOTAL_TIMESTEPS`, `ENT_COEF`, `EXP_NAME`, `ANNEAL_LR`,
+`RESUME_FROM`); unset, each script is unchanged. `run_count_based.slurm`'s
+`--gres=gpu:a100:1` corrected to generic `gpu:1` (an a100 request never schedules on a
+V100 allocation). New `slurm/submit_matched_matrix.sh` fires the 8 cells with matched
+`--export` values and logs job IDs + the commit hash.
+
+**Commit / precondition:** the matrix runs the fix branch
+`worktree-fix-next-step-gae-masking` (PR #14) — it is **not** on `main`, so the cluster
+checkout must `git checkout` that branch and pass `tests/test_gae_autoreset.py` (7/7)
+before submitting. The submit script records the exact commit hash it submits from.
+
+**Status — submission pending cluster access.** All 8 cells' commands were pre-flighted on
+the fixed code off-cluster (parse args, start training, exit 0, distinct run dirs). The
+actual `sbatch` could **not** be run from the dev machine (no SLURM client, no cluster
+route). Run `slurm/submit_matched_matrix.sh` on the login node after the STEP 0 checkout +
+the STEP 2 `salloc` SPS smoke; site-specific placeholders (partition, real V100 gres type,
+module names, `$SCRATCH`, walltime vs QOS cap, `WANDB_API_KEY`) must be confirmed there
+first (`doc/hpc-onboarding.md` §1).

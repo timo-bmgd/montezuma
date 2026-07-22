@@ -93,11 +93,25 @@ if [ -n "$RESUME_FROM" ]; then
     RESUME_ARGS=(--resume "$RESUME_FROM")
 fi
 
+# ── Matched-budget matrix overrides ─────────────────────────────────────────
+# All optional; the defaults below preserve this script's standalone behavior.
+# Set for a matched comparison via: sbatch --export=ALL,SEED=1,TOTAL_TIMESTEPS=...,NUM_ENVS=...
+# See slurm/submit_matched_matrix.sh and doc/matched-budget-submission.md.
+NUM_ENVS="${NUM_ENVS:-32}"
+TOTAL_TIMESTEPS="${TOTAL_TIMESTEPS:-3000000}"
+ENT_COEF="${ENT_COEF:-0.001}"              # rnd.py's paper-default (Burda et al. 2018)
+EXP_NAME="${EXP_NAME:-rnd}"                # override (e.g. rnd_ent01) to isolate the ablation
+ANNEAL_ARGS=()
+if [ "${ANNEAL_LR:-1}" = "0" ] || [ "${ANNEAL_LR:-1}" = "false" ]; then
+    ANNEAL_ARGS=(--no-anneal-lr)           # default: anneal ON (paper/CleanRL default)
+fi
+
 python src/agents/rnd.py \
     --env-id ALE/MontezumaRevenge-v5 \
-    --exp-name rnd \
-    --total-timesteps 3000000 \
-    --num-envs 32 \
+    --exp-name "$EXP_NAME" \
+    --total-timesteps "$TOTAL_TIMESTEPS" \
+    --num-envs "$NUM_ENVS" \
+    --ent-coef "$ENT_COEF" \
     --seed "${SEED:-1}" \
     --capture-video \
     --record-room-discovery \
@@ -107,4 +121,5 @@ python src/agents/rnd.py \
     --runs-dir "$SCRATCH/runs" \
     --videos-dir "$SCRATCH/videos" \
     --checkpoint-dir "$SCRATCH/checkpoints" \
+    "${ANNEAL_ARGS[@]}" \
     "${RESUME_ARGS[@]}"
