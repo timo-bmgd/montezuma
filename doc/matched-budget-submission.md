@@ -28,10 +28,16 @@ the venv in place; it does not check out a branch). The fix lives on branch
 node, before submitting:
 
 ```bash
-cd ~/montezuma           # or wherever the cluster checkout lives (JupyterHub: ~/work/montezuma)
+cd ~/workspace                          # home checkout (repo is small; keep it off /scratch)
+git clone git@github.com:timo-bmgd/montezuma.git   # skip if already cloned
+cd montezuma
 git fetch origin
 git checkout worktree-fix-next-step-gae-masking
-git rev-parse HEAD       # RECORD this hash — it is the commit the matrix runs
+git rev-parse HEAD                      # RECORD this hash — it is the commit the matrix runs
+
+# build the dedicated conda env on /scratch (one-time, ~6 GB, a few minutes):
+bash slurm/setup_hpc.sh
+conda activate /scratch/$USER/conda-envs/montezuma
 
 # verify the fix is actually present in the checked-out code (no ROMs / GPU needed):
 python tests/test_gae_autoreset.py       # must print "7/7 passed"
@@ -97,12 +103,28 @@ overrides (`NUM_ENVS`, `TOTAL_TIMESTEPS`, `ENT_COEF`, `EXP_NAME`, `ANNEAL_LR`,
 `--gres=gpu:a100:1` was corrected to the generic `gpu:1` (an a100 request never schedules
 on a V100 allocation).
 
-### Site-specific values to confirm on the cluster before submitting
-These are **placeholders** (`doc/hpc-onboarding.md` §1) — none are confirmable off-cluster:
-`--partition=gpu`, the real `--gres` type (`gpu:v100:1` vs generic `gpu:1`),
-`module load python/3.11` + `cuda/12.4` names, the `$SCRATCH` path, `--cpus-per-task` vs
-the real cores-per-GPU, the QOS `MaxWall` vs `--time`, and `WANDB_API_KEY` for `--track`
-(`doc/hpc-onboarding.md` §3 — a missing key hangs the job).
+### Cluster specifics — CONFIRMED for HTW KI-Werkstatt (`kiwihead01`, 2026-07-23)
+- **Partition `Debug_node`** (the only one; default). `MaxTime=UNLIMITED`,
+  `DefaultTime=1 day` → no walltime cap; a 3M run fits one job, no resume-chaining needed.
+- **`--gres=gpu:1`**, untyped (nodes advertise `gpu:4`, no v100/a100 qualifier).
+- **32 cores per GPU** (128 CPU ÷ 4 GPU) → `--cpus-per-task=32` + `NUM_ENVS=32` is a clean
+  1:1 fit on one GPU. 64 is not viable here.
+- **No `python`/`cuda` modules** — Python is a dedicated conda env
+  (`/scratch/$USER/conda-envs/montezuma`, built by `slurm/setup_hpc.sh`); CUDA comes from
+  the torch cu124 wheel. The scripts activate conda, not `module load`.
+- **Scratch**: `/scratch/$USER` (40 T, ~32 T free) → output lands in
+  `/scratch/$USER/montezuma/{runs,checkpoints,videos}` (the scripts' fallback resolves this).
+
+Still to set before submitting: **`WANDB_API_KEY`** for `--track` (`doc/hpc-onboarding.md`
+§3 — a missing key hangs the job; or drop `--track`), and the **real SPS** from the STEP 2
+salloc smoke (to right-size `WALLTIME`).
+
+### Shared-cluster etiquette (cluster rules)
+Only **8 GPUs exist cluster-wide** (2 nodes × `gpu:4`), shared with other KI-Werkstatt
+users. The full matrix is 8 one-GPU jobs = the entire cluster — **do not submit all 8 at
+once.** Stage it (below), stay reachable in Slack `#ki-werkstatt-hpc` while jobs run, and
+expect admins may cancel jobs on short notice to coordinate access. Never hold a GPU you
+are not using.
 
 ---
 
@@ -116,41 +138,47 @@ run dirs (`ppo`, `rnd`, `rnd_ent01`, `count_based` — the ablation does not col
 primary RND runs). The GAE-fix regression test passes 7/7.
 
 Before the mass submission, run the on-cluster equivalent inside a short `salloc`
-(`doc/hpc-onboarding.md` §4) to confirm GPU + modules + real SPS:
+(`doc/hpc-onboarding.md` §4) to confirm GPU visibility + real SPS:
 
 ```bash
-salloc --partition=gpu --gres=gpu:1 --cpus-per-task=32 --mem=32G --time=00:20:00
-module load python/3.11 cuda/12.4
-source ~/montezuma/.venv/bin/activate
-python -c "import torch; print(torch.cuda.get_device_name(0))"
+salloc --partition=Debug_node --gres=gpu:1 --cpus-per-task=32 --mem=32G --time=00:20:00
+conda activate /scratch/$USER/conda-envs/montezuma
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 python src/agents/rnd.py --total-timesteps 40000 --num-envs 32 --obs-norm-init-steps 2   # note the SPS
+exit
 ```
 
-Only proceed to STEP 3 once this is clean.
+Only proceed to STEP 3 once this is clean. Note the shared-cluster etiquette below.
 
 ---
 
 ## STEP 3 — Submit the matrix
 
-On the login node, from the repo root, with the fixed commit checked out (STEP 0):
+On the login node, from the repo root, with the fixed commit checked out (STEP 0).
+**Stage it** — 8 GPUs are shared cluster-wide, so don't grab them all at once:
 
 ```bash
 mkdir -p slurm-logs
-DRY_RUN=1 bash slurm/submit_matched_matrix.sh      # preview the 8 sbatch commands
-bash slurm/submit_matched_matrix.sh                # submit; job IDs -> slurm-logs/matched_matrix_<stamp>.tsv
-```
+DRY_RUN=1 bash slurm/submit_matched_matrix.sh                 # preview all 8 cells
 
-Override matched knobs inline if the salloc smoke says so, e.g.
-`NUM_ENVS=48 WALLTIME=08:00:00 GRES=gpu:v100:1 bash slurm/submit_matched_matrix.sh`.
-
-Equivalent single-cell form (if submitting by hand):
-```bash
+# Stage 1 — validate one real cell end-to-end (env + GPU + SPS + output paths):
 sbatch --export=ALL,SEED=1,NUM_ENVS=32,TOTAL_TIMESTEPS=3000000,ENT_COEF=0.001,EXP_NAME=rnd,ANNEAL_LR=1 slurm/run_rnd.slurm
+
+# Stage 2 — once that's healthy, the 3 primary seed-1 cells (PPO, RND, count):
+SEEDS=1 ABLATION_SEEDS="" bash slurm/submit_matched_matrix.sh
+
+# Stage 3 — the seed-2 primaries + the ent_coef ablation, as GPUs free up / Slack allows:
+SEEDS=2 bash slurm/submit_matched_matrix.sh                   # seed-2 primaries + ablation seeds 1,2
 ```
+
+`submit_matched_matrix.sh` already defaults `PARTITION=Debug_node`, `GRES=gpu:1`,
+`WALLTIME=06:00:00`; override inline if the salloc smoke says so, e.g.
+`WALLTIME=08:00:00 bash slurm/submit_matched_matrix.sh`. Job IDs + the commit hash land in
+`slurm-logs/matched_matrix_<stamp>.tsv`.
 
 Extend any run to a larger matched budget without restarting (resume-chaining):
 ```bash
-sbatch --export=ALL,SEED=1,TOTAL_TIMESTEPS=3000000,RESUME_FROM=$SCRATCH/montezuma/checkpoints/<run_name>/ckpt_XXXXXX.pt slurm/run_rnd.slurm
+sbatch --export=ALL,SEED=1,TOTAL_TIMESTEPS=3000000,RESUME_FROM=/scratch/$USER/montezuma/checkpoints/<run_name>/ckpt_XXXXXX.pt slurm/run_rnd.slurm
 ```
 
 ---

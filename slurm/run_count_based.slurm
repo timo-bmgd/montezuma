@@ -3,7 +3,7 @@
 #SBATCH --output=slurm-logs/%x_%j.out
 #SBATCH --error=slurm-logs/%x_%j.err
 #SBATCH --time=20:00:00
-#SBATCH --partition=gpu
+#SBATCH --partition=Debug_node
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=16G
@@ -38,9 +38,16 @@
 # --num-envs as a last resort (it changes batch_size/num_iterations, so it isn't a
 # free lever).
 
-module purge
-module load python/3.11
-module load cuda/12.4
+# HTW KI-Werkstatt has NO python/cuda environment modules -- Python is a dedicated conda
+# env, CUDA comes from the torch cu124 wheel's bundled runtime (see slurm/setup_hpc.sh and
+# doc/matched-budget-submission.md). CONDA_ENV_PREFIX must match what setup_hpc.sh created.
+CONDA_ENV_PREFIX="${CONDA_ENV_PREFIX:-/scratch/$USER/conda-envs/montezuma}"
+if [ -f /usr/etc/profile.d/conda.sh ]; then
+    source /usr/etc/profile.d/conda.sh
+elif command -v conda >/dev/null 2>&1; then
+    eval "$(conda shell.bash hook)"
+fi
+conda activate "$CONDA_ENV_PREFIX"
 
 # Untested hypothesis, not yet confirmed by scripts/profile_throughput.py: constrain
 # PyTorch's CPU thread pool so it doesn't additionally oversubscribe the same cores
@@ -49,7 +56,7 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-source "$PROJECT_DIR/.venv/bin/activate"
+cd "$PROJECT_DIR"
 
 SCRATCH="${SCRATCH:-/scratch/$USER}/montezuma"
 mkdir -p "$SCRATCH"/{runs,checkpoints,slurm-logs}

@@ -28,8 +28,8 @@ ABLATION_SEEDS="${ABLATION_SEEDS:-1 2}"     # RND ent_coef=0.01 ablation seeds (
 # ── matched cluster resources (confirm against your V100 partition first: ───
 #    sinfo -o "%P %c %G" ; sacctmgr show qos format=Name,MaxWall) ────────────
 WALLTIME="${WALLTIME:-06:00:00}"            # matched ceiling; job exits early on finish/auto-stop
-GRES="${GRES:-gpu:1}"                       # set to gpu:v100:1 once the real type name is confirmed
-PARTITION="${PARTITION:-gpu}"
+GRES="${GRES:-gpu:1}"                       # HTW KI-Werkstatt gres is untyped (gpu:N); no type qualifier
+PARTITION="${PARTITION:-Debug_node}"        # the only partition on kiwihead01
 
 DRY_RUN="${DRY_RUN:-0}"
 STAMP="$(date +%Y%m%d_%H%M%S)"
