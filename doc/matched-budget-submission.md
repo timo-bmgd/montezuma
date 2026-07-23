@@ -115,9 +115,10 @@ on a V100 allocation).
 - **Scratch**: `/scratch/$USER` (40 T, ~32 T free) → output lands in
   `/scratch/$USER/montezuma/{runs,checkpoints,videos}` (the scripts' fallback resolves this).
 
-Still to set before submitting: **`WANDB_API_KEY`** for `--track` (`doc/hpc-onboarding.md`
-§3 — a missing key hangs the job; or drop `--track`), and the **real SPS** from the STEP 2
-salloc smoke (to right-size `WALLTIME`).
+Logging is **TensorBoard only** — the run scripts do not pass `--track`, so no W&B account
+or `WANDB_API_KEY` is needed (event files land in `/scratch/$USER/montezuma/runs/`). The
+only value still to gather is the **real SPS** from the STEP 2 salloc smoke (to right-size
+`WALLTIME`).
 
 ### Shared-cluster etiquette (cluster rules)
 Only **8 GPUs exist cluster-wide** (2 nodes × `gpu:4`), shared with other KI-Werkstatt

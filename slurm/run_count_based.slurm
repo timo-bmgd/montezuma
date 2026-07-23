@@ -90,8 +90,6 @@ python src/agents/count_based.py \
     --seed "${SEED:-1}" \
     --capture-video \
     --record-room-discovery \
-    --track \
-    --wandb-project montezuma-thesis \
     --runs-dir "$SCRATCH/runs" \
     --videos-dir "$SCRATCH/videos" \
     --checkpoint-dir "$SCRATCH/checkpoints" \

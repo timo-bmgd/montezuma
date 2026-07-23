@@ -123,8 +123,6 @@ python src/agents/rnd.py \
     --capture-video \
     --record-room-discovery \
     --checkpoint-interval 50 \
-    --track \
-    --wandb-project montezuma-thesis \
     --runs-dir "$SCRATCH/runs" \
     --videos-dir "$SCRATCH/videos" \
     --checkpoint-dir "$SCRATCH/checkpoints" \

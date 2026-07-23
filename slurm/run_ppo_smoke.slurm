@@ -83,8 +83,6 @@ python src/agents/ppo.py \
     --record-room-discovery \
     --video-episode-interval 5 \
     --checkpoint-interval 10 \
-    --track \
-    --wandb-project montezuma-thesis-smoke \
     --runs-dir "$SCRATCH/runs" \
     --videos-dir "$SCRATCH/videos" \
     --checkpoint-dir "$SCRATCH/checkpoints" \

@@ -47,7 +47,7 @@ pip install torch==2.8.0+cu124 --extra-index-url https://download.pytorch.org/wh
 # Rest of dependencies (pinned to match requirements.txt / the dev venv)
 pip install gymnasium==1.3.0 ale-py==0.11.2 AutoROM==0.6.1
 pip install numpy==2.4.4 opencv-python-headless==4.13.0.92
-pip install tensorboard==2.20.0 wandb==0.18.7 pillow==11.3.0
+pip install tensorboard==2.20.0 pillow==11.3.0   # wandb intentionally omitted (runs use TensorBoard only)
 
 # Download and install Atari ROMs
 python -m AutoROM --accept-license
