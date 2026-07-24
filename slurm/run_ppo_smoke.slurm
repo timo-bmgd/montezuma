@@ -3,7 +3,7 @@
 #SBATCH --output=slurm-logs/%x_%j.out
 #SBATCH --error=slurm-logs/%x_%j.err
 #SBATCH --time=00:30:00
-#SBATCH --partition=gpu
+#SBATCH --partition=Debug_node
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=8G
@@ -46,15 +46,21 @@
 # --cpus-per-task should match --num-envs 1:1 -- see run_rnd_smoke.slurm's
 # header / doc/hpc-onboarding.md §1 for why.
 
-module purge
-module load python/3.11
-module load cuda/12.4
+# HTW KI-Werkstatt has NO python/cuda environment modules -- Python is a dedicated conda
+# env (see slurm/setup_hpc.sh). CONDA_ENV_PREFIX must match what setup_hpc.sh created.
+CONDA_ENV_PREFIX="${CONDA_ENV_PREFIX:-/scratch/$USER/conda-envs/montezuma}"
+if [ -f /usr/etc/profile.d/conda.sh ]; then
+    source /usr/etc/profile.d/conda.sh
+elif command -v conda >/dev/null 2>&1; then
+    eval "$(conda shell.bash hook)"
+fi
+conda activate "$CONDA_ENV_PREFIX"
 
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-source "$PROJECT_DIR/.venv/bin/activate"
+cd "$PROJECT_DIR"
 
 SCRATCH="${SCRATCH:-/scratch/$USER}/montezuma"
 mkdir -p "$SCRATCH"/{runs,checkpoints,slurm-logs}
@@ -77,8 +83,6 @@ python src/agents/ppo.py \
     --record-room-discovery \
     --video-episode-interval 5 \
     --checkpoint-interval 10 \
-    --track \
-    --wandb-project montezuma-thesis-smoke \
     --runs-dir "$SCRATCH/runs" \
     --videos-dir "$SCRATCH/videos" \
     --checkpoint-dir "$SCRATCH/checkpoints" \

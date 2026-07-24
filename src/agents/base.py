@@ -392,3 +392,67 @@ def make_env(
         return env
 
     return thunk
+
+
+def compute_gae(rewards, values, done_buf, next_value, next_done,
+                gamma, gae_lambda, episodic=True):
+    """Generalised Advantage Estimation, correct under gymnasium NEXT_STEP autoreset.
+
+    gymnasium 1.x vector envs default to ``AutoresetMode.NEXT_STEP``: the observation
+    at a terminal step is the true final frame, and the *following* step silently
+    discards the chosen action and returns the reset observation with reward 0. With
+    the agents' bookkeeping (``obs_buf[t]=next_obs``, ``done_buf[t]=next_done``), that
+    discarded-action reset step is exactly the step where ``done_buf[t]==1``: its stored
+    obs is the final frame, its action was ignored by the env, and its stored transition
+    bridges two unrelated episodes.
+
+    CleanRL's masking (``nextnonterminal = 1 - done_buf[t+1]``) was written for the old
+    SAME_STEP convention. It still correctly cuts the bootstrap at the genuine terminal
+    step, but leaves the following fake step bootstrapping V(final frame of ep N) onto
+    V(start of ep N+1). This helper additionally *walls off* every fake step: it
+    contributes no advantage and blocks advantage from flowing into earlier real steps.
+
+    For the episodic (extrinsic) stream the wall is behaviour-preserving on every kept
+    sample (the ``nextnonterminal=0`` at the genuine terminal step already firewalls the
+    flow); it only zeros the fake step's advantage, which the update batch excludes
+    anyway. For the non-episodic (``episodic=False``) intrinsic stream there is no such
+    firewall, so the wall is what actually stops the fake frame from bridging episodes.
+
+    Args:
+        rewards, values, done_buf: (T, N) tensors from the rollout buffers.
+        next_value: (1, N) or (N,) bootstrap value of the obs after the last rollout step.
+        next_done: (N,) done flag after the last rollout step.
+        gamma, gae_lambda: discount and GAE lambda.
+        episodic: if False, never cut the bootstrap at episode boundaries (intrinsic RND
+            stream); the fake-step wall still applies.
+
+    Returns:
+        advantages: (T, N) tensor. Callers form ``returns = advantages + values``.
+    """
+    num_steps = rewards.shape[0]
+    advantages = torch.zeros_like(rewards)
+    lastgaelam = 0
+    for t in reversed(range(num_steps)):
+        if t == num_steps - 1:
+            nextnonterminal = (1.0 - next_done) if episodic else 1.0
+            nextvalues = next_value
+        else:
+            nextnonterminal = (1.0 - done_buf[t + 1]) if episodic else 1.0
+            nextvalues = values[t + 1]
+        delta = rewards[t] + gamma * nextvalues * nextnonterminal - values[t]
+        lastgaelam = delta + gamma * gae_lambda * nextnonterminal * lastgaelam
+        # Wall off the NEXT_STEP fake (discarded-action reset) step: no advantage, and
+        # no flow into earlier real steps.
+        lastgaelam = lastgaelam * (1.0 - done_buf[t])
+        advantages[t] = lastgaelam
+    return advantages
+
+
+def masked_mean(x, mask):
+    """Mean of ``x`` over entries where ``mask`` is 1, broadcast over ``mask``.
+
+    Used to exclude NEXT_STEP fake (discarded-action) steps from the PPO losses so the
+    silently-discarded terminal-frame action is not fed to the policy gradient. NaN-safe:
+    returns 0 when ``mask`` is all-zero (the masked contributions are then all 0 too).
+    """
+    return (x * mask).sum() / mask.sum().clamp(min=1.0)

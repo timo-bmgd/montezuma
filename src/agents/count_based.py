@@ -27,7 +27,7 @@ from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from agents.base import NatureCNN, layer_init, make_env
+from agents.base import NatureCNN, compute_gae, layer_init, make_env, masked_mean
 
 
 def parse_args():
@@ -295,19 +295,12 @@ def train():
                         writer.add_scalar("charts/rooms_visited", int(infos["rooms_visited"][i]), global_step)
 
         # ── GAE ─────────────────────────────────────────────────────────────
+        # NEXT_STEP-autoreset-correct GAE (see agents.base.compute_gae): the
+        # discarded-action reset step (done_buf[t]==1) is walled off.
         with torch.no_grad():
             next_value = agent.get_value(next_obs).reshape(1, -1)
-            advantages = torch.zeros_like(rew_buf, device=device)
-            lastgaelam = 0
-            for t in reversed(range(args.num_steps)):
-                if t == args.num_steps - 1:
-                    nextnonterminal = 1.0 - next_done
-                    nextvalues = next_value
-                else:
-                    nextnonterminal = 1.0 - done_buf[t + 1]
-                    nextvalues = val_buf[t + 1]
-                delta = rew_buf[t] + args.gamma * nextvalues * nextnonterminal - val_buf[t]
-                advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
+            advantages = compute_gae(rew_buf, val_buf, done_buf, next_value, next_done,
+                                     args.gamma, args.gae_lambda, episodic=True)
             returns = advantages + val_buf
 
         # ── PPO update ──────────────────────────────────────────────────────
@@ -317,12 +310,17 @@ def train():
         b_adv  = advantages.reshape(-1)
         b_ret  = returns.reshape(-1)
         b_val  = val_buf.reshape(-1)
+        # 1 for real steps, 0 for NEXT_STEP fake (discarded-action) steps; excludes the
+        # discarded terminal-frame action and its cross-episode value target from the update.
+        b_keep = (1.0 - done_buf).reshape(-1)
 
         clipfracs = []
         for _ in range(args.update_epochs):
             mb_inds = np.random.permutation(batch_size)
             for start in range(0, batch_size, minibatch_size):
                 mb = mb_inds[start : start + minibatch_size]
+
+                mb_keep = b_keep[mb]  # exclude NEXT_STEP fake steps from all losses/diagnostics
 
                 _, newlogprob, entropy, newvalue = agent.get_action_and_value(
                     b_obs[mb], b_act.long()[mb]
@@ -331,25 +329,28 @@ def train():
                 ratio = logratio.exp()
 
                 with torch.no_grad():
-                    approx_kl = ((ratio - 1) - logratio).mean()
-                    clipfracs.append(((ratio - 1.0).abs() > args.clip_coef).float().mean().item())
+                    approx_kl = masked_mean((ratio - 1) - logratio, mb_keep)
+                    clipfracs.append(masked_mean(((ratio - 1.0).abs() > args.clip_coef).float(), mb_keep).item())
 
+                # normalise advantages over real (kept) samples only
                 mb_adv_norm = b_adv[mb]
-                mb_adv_norm = (mb_adv_norm - mb_adv_norm.mean()) / (mb_adv_norm.std() + 1e-8)
+                adv_mean = masked_mean(mb_adv_norm, mb_keep)
+                adv_std = torch.sqrt(masked_mean((mb_adv_norm - adv_mean) ** 2, mb_keep) + 1e-8)
+                mb_adv_norm = (mb_adv_norm - adv_mean) / (adv_std + 1e-8)
 
-                pg_loss = torch.max(
+                pg_loss = masked_mean(torch.max(
                     -mb_adv_norm * ratio,
                     -mb_adv_norm * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef),
-                ).mean()
+                ), mb_keep)
 
                 newvalue = newvalue.view(-1)
                 v_clipped = b_val[mb] + torch.clamp(newvalue - b_val[mb], -args.clip_coef, args.clip_coef)
-                v_loss = 0.5 * torch.max(
+                v_loss = 0.5 * masked_mean(torch.max(
                     (newvalue - b_ret[mb]) ** 2,
                     (v_clipped - b_ret[mb]) ** 2,
-                ).mean()
+                ), mb_keep)
 
-                loss = pg_loss - args.ent_coef * entropy.mean() + v_loss * args.vf_coef
+                loss = pg_loss - args.ent_coef * masked_mean(entropy, mb_keep) + v_loss * args.vf_coef
 
                 optimizer.zero_grad()
                 loss.backward()
