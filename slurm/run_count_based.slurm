@@ -55,7 +55,10 @@ conda activate "$CONDA_ENV_PREFIX"
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 
-PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# Under sbatch the script is copied to the spool dir, so $0 is NOT the repo path.
+# SLURM_SUBMIT_DIR is the directory sbatch was invoked from -- submit from the repo root
+# (the submit scripts / doc do). Fall back to $0-relative for direct `bash slurm/...` runs.
+PROJECT_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$PROJECT_DIR"
 
 SCRATCH="${SCRATCH:-/scratch/$USER}/montezuma"
