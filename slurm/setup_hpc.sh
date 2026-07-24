@@ -47,13 +47,15 @@ pip install --upgrade pip wheel
 #   nvidia-smi   (on a GPU node -- top-right "CUDA Version: XX.X")
 # then set TORCH_CUDA_TAG accordingly. NOTE: PyTorch only builds "+cu124" wheels up to
 # torch 2.6.0; newer torch uses cu126/cu128. So the version and the CUDA tag are coupled:
-#   driver CUDA >= 12.8 -> TORCH_CUDA_TAG=cu128  TORCH_VERSION=2.8.0
-#   driver CUDA  = 12.6/12.7 -> TORCH_CUDA_TAG=cu126  TORCH_VERSION=2.8.0   (default below)
+#   driver CUDA >= 12.8 -> TORCH_CUDA_TAG=cu128  TORCH_VERSION=2.8.0   (default below)
+#   driver CUDA  = 12.6/12.7 -> TORCH_CUDA_TAG=cu126  TORCH_VERSION=2.8.0
 #   driver CUDA  = 12.4/12.5 -> TORCH_CUDA_TAG=cu124  TORCH_VERSION=2.6.0
 #   driver CUDA  = 12.1..12.3 -> TORCH_CUDA_TAG=cu121  TORCH_VERSION=2.5.1
 # Override without editing this file, e.g.:
 #   TORCH_CUDA_TAG=cu124 TORCH_VERSION=2.6.0 bash slurm/setup_hpc.sh
-TORCH_CUDA_TAG="${TORCH_CUDA_TAG:-cu126}"
+# Default cu128 confirmed against kiwihead01's driver 580.95.05 (nvidia-smi CUDA 13.0,
+# 2026-07-24) -- a cu128 wheel runs on this driver (drivers are backward-compatible).
+TORCH_CUDA_TAG="${TORCH_CUDA_TAG:-cu128}"
 TORCH_VERSION="${TORCH_VERSION:-2.8.0}"
 echo ">>> installing torch==${TORCH_VERSION} (${TORCH_CUDA_TAG}) -- must be <= the node's nvidia-smi CUDA version"
 pip install "torch==${TORCH_VERSION}" --index-url "https://download.pytorch.org/whl/${TORCH_CUDA_TAG}"
