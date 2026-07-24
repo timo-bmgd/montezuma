@@ -13,6 +13,26 @@ ALE documentation: https://ale.farama.org/
 2. RND (Random Network Distillation) (`rnd.py`) — key algorithm of interest
 3. PPO (`ppo.py`) — standard policy gradient baseline
 
+**Current focus — the noisy-TV experiment (this is the active thesis experiment).** The
+question being run *now* is **not** an RND-vs-PPO performance comparison. It is whether the
+**noisy-TV problem** manifests for RND on Montezuma: when a synthetic noise patch ("TV") is
+injected into observations, does RND's curiosity get *captured* — **signal capture**
+(intrinsic reward stays dominated by the patch, the predictor never catches up) and/or
+**behavioral capture** (the agent learns to *seek* the stochasticity, e.g. press a "TV
+remote" action, instead of exploring)? Design, run matrix, and metrics are in
+`doc/noisy-tv-experiment.md`; the launcher is the "Noisy-TV experiment matrix" cell in
+`training-runs.ipynb` (JupyterHub) and `slurm/run_rnd_tv.slurm` / `run_ppo_tv.slurm` (HPC).
+Conditions: `off` (baseline) → **`remote`** (primary: agent-controllable TV) vs
+`sham-remote` (action-space control) and `static` (signal-degradation ablation). Key metrics:
+`charts/tv_action_frac` (vs chance 1/19 ≈ 0.053) and `charts/tv_intrinsic_share`.
+
+**Superseded / background:** the earlier *RND-vs-PPO asymmetry* investigation
+(`doc/rnd-vs-ppo-asymmetry-investigation.md`) and the matched-budget PPO/RND/count comparison
+it proposed are **no longer the active question** — treat them as historical context, not
+current work. (The gymnasium `NEXT_STEP` GAE-masking fix that came out of that investigation,
+`doc/decisions.md`, still stands: it is a correctness fix that benefits *all* runs, including
+the noisy-TV matrix.)
+
 ## Environment Setup
 
 Python 3.13, `.venv` virtual environment. The VSCode interpreter is configured to `.venv/bin/python3`.
@@ -230,7 +250,7 @@ reflects Bellemare's numbers specifically.
 
 - `src/` — main source code (agents + shared utilities; see Source Code Structure above)
 - `examples/` — lightweight, standalone reference scripts; keep up to date with current ale_py/gymnasium API
-- `doc/` — investigation write-ups and usage guides (`running-agents.md`, `throughput-investigation.md`, `decisions.md`, `pipeline-history.md`, `10M-RND-run-failure-documentation.md`, `rnd-vs-ppo-asymmetry-investigation.md`, `hpc-onboarding.md`, `noisy-tv-experiment.md` — the main thesis experiment: design, metrics, run matrix)
+- `doc/` — investigation write-ups and usage guides (`running-agents.md`, `throughput-investigation.md`, `decisions.md`, `pipeline-history.md`, `hpc-onboarding.md`, `matched-budget-submission.md`, `10M-RND-run-failure-documentation.md`, `rnd-vs-ppo-asymmetry-investigation.md`, `noisy-tv-experiment.md`). **`noisy-tv-experiment.md` is the current/main thesis experiment** (design, metrics, run matrix); `rnd-vs-ppo-asymmetry-investigation.md`, `matched-budget-submission.md`, and `10M-RND-run-failure-documentation.md` are **background/superseded** (see "Current focus" above)
 - `slurm/` — SLURM job scripts for cluster training runs: `run_rnd_smoke.slurm`/`run_ppo_smoke.slurm` (infrastructure smoke tests, minutes-scale, run these first — see `doc/hpc-onboarding.md`), `run_rnd.slurm`/`run_ppo.slurm` (production runs, hours-scale), `run_count_based.slurm` (production, count-based pipeline still under separate setup by the user). `run_rnd_falsify.slurm` was removed 2026-07-14 — its ent_coef hypothesis was reverted (see `doc/decisions.md`) and it was repurposed into `run_rnd_smoke.slurm`. `run_rnd_tv.slurm`/`run_ppo_tv.slurm` run the noisy-TV experiment matrix (10M steps / 8 envs, `TV_MODE` env var selects the condition — see `doc/noisy-tv-experiment.md`).
 - `scripts/` — utility scripts, e.g. `profile_throughput.py` for measuring training SPS, `check_noisy_tv.py` for the noisy-TV wrapper's deterministic self-checks (run before any TV production submission)
 - `.claude/skills/` — Claude Code skill definitions (see below)

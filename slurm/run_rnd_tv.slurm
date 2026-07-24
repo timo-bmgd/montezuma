@@ -2,10 +2,10 @@
 #SBATCH --job-name=montezuma-rnd-tv
 #SBATCH --output=slurm-logs/%x_%j.out
 #SBATCH --error=slurm-logs/%x_%j.err
-#SBATCH --time=20:00:00
-#SBATCH --partition=gpu
+#SBATCH --time=06:00:00
+#SBATCH --partition=Debug_node
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=32
 #SBATCH --mem=32G
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -13,10 +13,12 @@
 # Noisy-TV experiment production run (the thesis's main experiment -- see
 # doc/noisy-tv-experiment.md for hypothesis, conditions and analysis readouts).
 #
-# Scale: 10M steps at num_envs=8, deliberately matching the historical
-# rnd_10m_s1/s2 baselines (doc/10M-RND-run-failure-documentation.md) so TV
-# conditions are comparable against a known reference scale. One script covers
-# every RND condition of the experiment matrix via TV_MODE:
+# Scale: defaults to 10M steps at num_envs=32 -- a clean 1:1 with
+# --cpus-per-task=32 on the A100 node (32 cores/GPU; AsyncVectorEnv spawns one
+# subprocess per env, so CPUs must match env count). NUM_ENVS and TOTAL_TIMESTEPS
+# are overridable via --export. All TV conditions share the same num_envs so they
+# stay comparable to each other. One script covers every RND condition of the
+# experiment matrix via TV_MODE:
 #
 #   TV_MODE=off          fresh baseline on current code (old baselines predate
 #                        code changes: reward clipping, resume fix, ...)
@@ -37,11 +39,14 @@
 #     the sustained-high-intrinsic trajectory IS the data. A 42:0 here would
 #     mean intrinsic collapsed despite the TV -- surprising, look closely.
 #
-# Walltime: prior 10M/8-env runs sustained SPS 144-183 -> ~15-19 h. If the
-# partition caps below 20 h, keep shorter blocks and chain them via
-# RESUME_FROM (must repeat the SAME TV_MODE -- rnd.py aborts a --resume whose
-# --tv-* flags differ from the checkpoint's, since remote and sham-remote
-# load into identical network shapes and would otherwise swap silently).
+# Walltime: at ~1320 SPS (num_envs=32 on the A100-80GB, measured 2026-07-24) 10M
+# steps take ~2.1 h and 20M ~4.2 h. The #SBATCH --time above is a ceiling and is
+# usually overridden per-submission (e.g. --time=04:00:00). Debug_node has no
+# walltime cap, but pass a tight --time so a hung job frees the shared GPU promptly.
+# To extend a walltime-truncated run, chain via RESUME_FROM (must repeat the SAME
+# TV_MODE -- rnd.py aborts a --resume whose --tv-* flags differ from the
+# checkpoint's, since remote and sham-remote load into identical network shapes
+# and would otherwise swap silently).
 #
 # Usage (submit from the project root -- #SBATCH --output and PROJECT_DIR
 # both assume it; slurm-logs/ is committed to the repo so it always exists):
@@ -53,10 +58,6 @@
 #   sbatch --export=ALL,SEED=1,TV_MODE=remote,RESUME_FROM=$SCRATCH/montezuma/checkpoints/<run_name>/ckpt_XXXXXX.pt slurm/run_rnd_tv.slurm
 
 set -eo pipefail
-
-module purge
-module load python/3.11
-module load cuda/12.4
 
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -70,7 +71,16 @@ fi
 # SLURM_SUBMIT_DIR is the directory sbatch was invoked from (the project root,
 # per the usage above); the $0 fallback covers direct `bash slurm/...` runs.
 PROJECT_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-source "$PROJECT_DIR/.venv/bin/activate"
+cd "$PROJECT_DIR"
+
+# HTW KI-Werkstatt has NO python/cuda modules -- dedicated conda env (see slurm/setup_hpc.sh).
+CONDA_ENV_PREFIX="${CONDA_ENV_PREFIX:-/scratch/$USER/conda-envs/montezuma}"
+if [ -f /usr/etc/profile.d/conda.sh ]; then
+    source /usr/etc/profile.d/conda.sh
+elif command -v conda >/dev/null 2>&1; then
+    eval "$(conda shell.bash hook)"
+fi
+conda activate "$CONDA_ENV_PREFIX"
 
 SCRATCH="${SCRATCH:-/scratch/$USER}/montezuma"
 mkdir -p "$SCRATCH"/{runs,checkpoints}
@@ -87,15 +97,13 @@ python src/agents/rnd.py \
     --env-id ALE/MontezumaRevenge-v5 \
     --exp-name "rnd_tv_${TV_MODE}" \
     --tv-mode "$TV_MODE" \
-    --total-timesteps 10000000 \
-    --num-envs 8 \
+    --total-timesteps "${TOTAL_TIMESTEPS:-10000000}" \
+    --num-envs "${NUM_ENVS:-32}" \
     --seed "${SEED:-1}" \
     --capture-video \
     --record-room-discovery \
     --video-episode-interval 100 \
     --checkpoint-interval 100 \
-    --track \
-    --wandb-project montezuma-thesis \
     --runs-dir "$SCRATCH/runs" \
     --videos-dir "$SCRATCH/videos" \
     --checkpoint-dir "$SCRATCH/checkpoints" \

@@ -2,10 +2,10 @@
 #SBATCH --job-name=montezuma-ppo-tv
 #SBATCH --output=slurm-logs/%x_%j.out
 #SBATCH --error=slurm-logs/%x_%j.err
-#SBATCH --time=20:00:00
-#SBATCH --partition=gpu
+#SBATCH --time=06:00:00
+#SBATCH --partition=Debug_node
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=32
 #SBATCH --mem=32G
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -19,19 +19,16 @@
 #   TV_MODE=remote  the core control run of the matrix
 #   TV_MODE=off     optional fresh PPO reference on current code
 #
-# Scale matches the RND runs (10M steps / 8 envs) for a like-for-like
-# comparison. See slurm/run_rnd_tv.slurm's header for walltime/chaining and
-# the resume --tv-* consistency guard, which apply identically here.
+# Scale matches the RND runs (defaults: 10M steps / num_envs=32, both
+# overridable via TOTAL_TIMESTEPS / NUM_ENVS) for a like-for-like comparison.
+# See slurm/run_rnd_tv.slurm's header for walltime/chaining and the resume
+# --tv-* consistency guard, which apply identically here.
 #
 # Usage (submit from the project root -- #SBATCH --output and PROJECT_DIR
 # both assume it; slurm-logs/ is committed to the repo so it always exists):
 #   sbatch --export=ALL,SEED=1,TV_MODE=remote slurm/run_ppo_tv.slurm
 
 set -eo pipefail
-
-module purge
-module load python/3.11
-module load cuda/12.4
 
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -45,7 +42,16 @@ fi
 # SLURM_SUBMIT_DIR is the directory sbatch was invoked from (the project root,
 # per the usage above); the $0 fallback covers direct `bash slurm/...` runs.
 PROJECT_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-source "$PROJECT_DIR/.venv/bin/activate"
+cd "$PROJECT_DIR"
+
+# HTW KI-Werkstatt has NO python/cuda modules -- dedicated conda env (see slurm/setup_hpc.sh).
+CONDA_ENV_PREFIX="${CONDA_ENV_PREFIX:-/scratch/$USER/conda-envs/montezuma}"
+if [ -f /usr/etc/profile.d/conda.sh ]; then
+    source /usr/etc/profile.d/conda.sh
+elif command -v conda >/dev/null 2>&1; then
+    eval "$(conda shell.bash hook)"
+fi
+conda activate "$CONDA_ENV_PREFIX"
 
 SCRATCH="${SCRATCH:-/scratch/$USER}/montezuma"
 mkdir -p "$SCRATCH"/{runs,checkpoints}
@@ -62,15 +68,13 @@ python src/agents/ppo.py \
     --env-id ALE/MontezumaRevenge-v5 \
     --exp-name "ppo_tv_${TV_MODE}" \
     --tv-mode "$TV_MODE" \
-    --total-timesteps 10000000 \
-    --num-envs 8 \
+    --total-timesteps "${TOTAL_TIMESTEPS:-10000000}" \
+    --num-envs "${NUM_ENVS:-32}" \
     --seed "${SEED:-1}" \
     --capture-video \
     --record-room-discovery \
     --video-episode-interval 100 \
     --checkpoint-interval 100 \
-    --track \
-    --wandb-project montezuma-thesis \
     --runs-dir "$SCRATCH/runs" \
     --videos-dir "$SCRATCH/videos" \
     --checkpoint-dir "$SCRATCH/checkpoints" \
