@@ -2,10 +2,10 @@
 #SBATCH --job-name=montezuma-ppo-tv
 #SBATCH --output=slurm-logs/%x_%j.out
 #SBATCH --error=slurm-logs/%x_%j.err
-#SBATCH --time=20:00:00
+#SBATCH --time=06:00:00
 #SBATCH --partition=Debug_node
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=32
 #SBATCH --mem=32G
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -19,9 +19,10 @@
 #   TV_MODE=remote  the core control run of the matrix
 #   TV_MODE=off     optional fresh PPO reference on current code
 #
-# Scale matches the RND runs (10M steps / 8 envs) for a like-for-like
-# comparison. See slurm/run_rnd_tv.slurm's header for walltime/chaining and
-# the resume --tv-* consistency guard, which apply identically here.
+# Scale matches the RND runs (defaults: 10M steps / num_envs=32, both
+# overridable via TOTAL_TIMESTEPS / NUM_ENVS) for a like-for-like comparison.
+# See slurm/run_rnd_tv.slurm's header for walltime/chaining and the resume
+# --tv-* consistency guard, which apply identically here.
 #
 # Usage (submit from the project root -- #SBATCH --output and PROJECT_DIR
 # both assume it; slurm-logs/ is committed to the repo so it always exists):

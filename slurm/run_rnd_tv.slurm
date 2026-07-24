@@ -2,10 +2,10 @@
 #SBATCH --job-name=montezuma-rnd-tv
 #SBATCH --output=slurm-logs/%x_%j.out
 #SBATCH --error=slurm-logs/%x_%j.err
-#SBATCH --time=20:00:00
+#SBATCH --time=06:00:00
 #SBATCH --partition=Debug_node
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=32
 #SBATCH --mem=32G
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -13,10 +13,12 @@
 # Noisy-TV experiment production run (the thesis's main experiment -- see
 # doc/noisy-tv-experiment.md for hypothesis, conditions and analysis readouts).
 #
-# Scale: 10M steps at num_envs=8, deliberately matching the historical
-# rnd_10m_s1/s2 baselines (doc/10M-RND-run-failure-documentation.md) so TV
-# conditions are comparable against a known reference scale. One script covers
-# every RND condition of the experiment matrix via TV_MODE:
+# Scale: defaults to 10M steps at num_envs=32 -- a clean 1:1 with
+# --cpus-per-task=32 on the A100 node (32 cores/GPU; AsyncVectorEnv spawns one
+# subprocess per env, so CPUs must match env count). NUM_ENVS and TOTAL_TIMESTEPS
+# are overridable via --export. All TV conditions share the same num_envs so they
+# stay comparable to each other. One script covers every RND condition of the
+# experiment matrix via TV_MODE:
 #
 #   TV_MODE=off          fresh baseline on current code (old baselines predate
 #                        code changes: reward clipping, resume fix, ...)
@@ -37,11 +39,14 @@
 #     the sustained-high-intrinsic trajectory IS the data. A 42:0 here would
 #     mean intrinsic collapsed despite the TV -- surprising, look closely.
 #
-# Walltime: prior 10M/8-env runs sustained SPS 144-183 -> ~15-19 h. If the
-# partition caps below 20 h, keep shorter blocks and chain them via
-# RESUME_FROM (must repeat the SAME TV_MODE -- rnd.py aborts a --resume whose
-# --tv-* flags differ from the checkpoint's, since remote and sham-remote
-# load into identical network shapes and would otherwise swap silently).
+# Walltime: at ~1320 SPS (num_envs=32 on the A100-80GB, measured 2026-07-24) 10M
+# steps take ~2.1 h and 20M ~4.2 h. The #SBATCH --time above is a ceiling and is
+# usually overridden per-submission (e.g. --time=04:00:00). Debug_node has no
+# walltime cap, but pass a tight --time so a hung job frees the shared GPU promptly.
+# To extend a walltime-truncated run, chain via RESUME_FROM (must repeat the SAME
+# TV_MODE -- rnd.py aborts a --resume whose --tv-* flags differ from the
+# checkpoint's, since remote and sham-remote load into identical network shapes
+# and would otherwise swap silently).
 #
 # Usage (submit from the project root -- #SBATCH --output and PROJECT_DIR
 # both assume it; slurm-logs/ is committed to the repo so it always exists):
