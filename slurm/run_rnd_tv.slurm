@@ -61,6 +61,10 @@ set -eo pipefail
 
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
+# Stream prints to the .out file live -- without this, Python block-buffers stdout to a
+# file (not a TTY), so iteration/episode lines sit in an 8 KB buffer and the log looks
+# frozen for minutes even while training is running fine.
+export PYTHONUNBUFFERED=1
 
 if [ -z "${TV_MODE:-}" ]; then
     echo "ERROR: TV_MODE must be set (off|static|remote|sham-remote)" >&2
