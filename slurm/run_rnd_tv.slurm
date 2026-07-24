@@ -93,6 +93,11 @@ if [ -n "${RESUME_FROM:-}" ]; then
     RESUME_ARGS=(--resume "$RESUME_FROM")
 fi
 
+# Echo the resolved run config so overrides are never silently ignored (if this line
+# shows total_timesteps=10000000 when you passed TOTAL_TIMESTEPS=20000000, your checkout
+# predates the override -- git pull).
+echo ">>> RUN CONFIG: tv_mode=$TV_MODE seed=${SEED:-1} num_envs=${NUM_ENVS:-32} total_timesteps=${TOTAL_TIMESTEPS:-10000000} resume=${RESUME_FROM:-none}"
+
 python src/agents/rnd.py \
     --env-id ALE/MontezumaRevenge-v5 \
     --exp-name "rnd_tv_${TV_MODE}" \
