@@ -58,7 +58,7 @@ Two notebooks drive the JupyterHub workflow:
 - `jupyter-setup.ipynb` — one-time environment setup: clone/pull the repo, `pip install` Atari/RL deps (numpy pinned `<2` — see below), download ROMs, run a smoke test.
 - `training-runs.ipynb` — quick-launch notebook for production training jobs. A `launch()` helper wraps `nohup` + a `gpu=` param that sets `CUDA_VISIBLE_DEVICES`, so multiple jobs (e.g. two RND seeds + a PPO baseline) can run in parallel across separate GPUs on a multi-GPU JupyterHub instance.
 
-`--sync-envs` is required on JupyterHub for every run: `AsyncVectorEnv` uses Python multiprocessing, which is unreliable inside Jupyter/container environments (`RuntimeError: Numpy is not available`). `--sync-envs` falls back to the single-process `SyncVectorEnv`.
+`AsyncVectorEnv` (the default — i.e. **omit** `--sync-envs`) works fine on JupyterHub with the `numpy<2` pin and is preferred: it steps envs in parallel across CPU cores instead of serially, so throughput scales with `--num-envs`. The historical `RuntimeError: Numpy is not available` was a NumPy-2.x / `ale-py` ABI mismatch, **not** a multiprocessing limitation — it was mis-attributed to `AsyncVectorEnv`, and the old "`--sync-envs` is required on JupyterHub" guidance was wrong (verified 2026-07-20: a 32-env async run launches cleanly under the pin). `--sync-envs` remains available as a single-process (`SyncVectorEnv`) fallback but is slower; only reach for it if async ever misbehaves.
 
 Production runs should pass a large `--checkpoint-interval` (e.g. `99999`) to effectively disable checkpointing — checkpoints otherwise fill the JupyterHub disk quota over long runs.
 
