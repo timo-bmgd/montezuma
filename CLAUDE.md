@@ -192,6 +192,16 @@ scalars = ea.Tags()["scalars"]          # list of available metric names
 steps, vals = zip(*[(e.step, e.value) for e in ea.Scalars("charts/episodic_return")])
 ```
 
+**Batch overlay + summary pipeline** — `scripts/analyze_runs.py` wraps the `EventAccumulator` parsing above for whole-batch comparison. Point it at a directory whose immediate subdirectories are runs; it writes overlaid per-metric charts (all runs on shared axes) plus a multi-panel `_overview.png` into `<logdir>/figures/`, and a derived-events table — when each agent left room 1, room-2 episode counts, peak intrinsic reward, final entropy, TV intrinsic share, explained variance, … — into `<logdir>/summary.md` and `summary.csv`:
+
+```bash
+source .venv/bin/activate
+python scripts/analyze_runs.py --logdir analysis     # default --logdir is analysis; --out overrides the figures dir
+tensorboard --logdir analysis                        # same runs, interactive overlay
+```
+
+Works on any run set (e.g. `--logdir runs`). Caveat it encodes: `charts/rooms_visited` is a *per-episode* distinct-room count (resets every episode), so it reads flat at 1 even when a run does occasionally reach room 2 — read the generated `figures/charts__rooms_furthest_cummax.png` (cumulative furthest room reached) for exploration over time. `analysis/` (6 completed 10M noisy-TV runs + `README.md`) is the worked example this was built for.
+
 **Key metrics to check when diagnosing a failed RND run:**
 
 | Metric | Healthy sign | Failure sign |
@@ -252,7 +262,7 @@ reflects Bellemare's numbers specifically.
 - `examples/` — lightweight, standalone reference scripts; keep up to date with current ale_py/gymnasium API
 - `doc/` — investigation write-ups and usage guides (`running-agents.md`, `throughput-investigation.md`, `decisions.md`, `pipeline-history.md`, `hpc-onboarding.md`, `matched-budget-submission.md`, `10M-RND-run-failure-documentation.md`, `rnd-vs-ppo-asymmetry-investigation.md`, `noisy-tv-experiment.md`). **`noisy-tv-experiment.md` is the current/main thesis experiment** (design, metrics, run matrix); `rnd-vs-ppo-asymmetry-investigation.md`, `matched-budget-submission.md`, and `10M-RND-run-failure-documentation.md` are **background/superseded** (see "Current focus" above)
 - `slurm/` — SLURM job scripts for cluster training runs: `run_rnd_smoke.slurm`/`run_ppo_smoke.slurm` (infrastructure smoke tests, minutes-scale, run these first — see `doc/hpc-onboarding.md`), `run_rnd.slurm`/`run_ppo.slurm` (production runs, hours-scale), `run_count_based.slurm` (production, count-based pipeline still under separate setup by the user). `run_rnd_falsify.slurm` was removed 2026-07-14 — its ent_coef hypothesis was reverted (see `doc/decisions.md`) and it was repurposed into `run_rnd_smoke.slurm`. `run_rnd_tv.slurm`/`run_ppo_tv.slurm` run the noisy-TV experiment matrix (10M steps / 8 envs, `TV_MODE` env var selects the condition — see `doc/noisy-tv-experiment.md`).
-- `scripts/` — utility scripts, e.g. `profile_throughput.py` for measuring training SPS, `check_noisy_tv.py` for the noisy-TV wrapper's deterministic self-checks (run before any TV production submission)
+- `scripts/` — utility scripts, e.g. `profile_throughput.py` for measuring training SPS, `check_noisy_tv.py` for the noisy-TV wrapper's deterministic self-checks (run before any TV production submission), `analyze_runs.py` for overlay-comparing a batch of TensorBoard runs and emitting a derived-events summary (see “Log Analysis”)
 - `.claude/skills/` — Claude Code skill definitions (see below)
 - `cartpole-training/`, `_static/` — gitignored; training videos/static assets from the CartPole recording example, not relevant to the main project and may not exist in a fresh checkout
 
