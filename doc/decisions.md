@@ -410,3 +410,64 @@ route). Run `slurm/submit_matched_matrix.sh` on the login node after the STEP 0 
 the STEP 2 `salloc` SPS smoke; site-specific placeholders (partition, real V100 gres type,
 module names, `$SCRATCH`, walltime vs QOS cap, `WANDB_API_KEY`) must be confirmed there
 first (`doc/hpc-onboarding.md` §1).
+
+---
+
+## 2026-07-25 — "Stuck in room 1" 20M/32-env runs: no regression, no bug found
+
+**Decision:** Close the "the 20M/32-env noisy-TV runs are broken / regressed"
+investigation **without a code fix**, because the premise does not survive its
+own reference data. Full evidence in `doc/run-analysis.md` (TASK A) and
+`doc/regression-findings.md` (B–F). Summary of what was concluded and why:
+
+- **No regression.** The `analysis/HPC-Runs/` runs (32 env, 20M) reproduce the
+  `analysis/Jupyter-Pod-Runs/` reference runs (21 env, 10M) curve-for-curve —
+  entropy decays to ~0.3–0.6, `episodic_return`≈0, exploration intermittently
+  reaches room 2 in `off` and never in `remote`/`sham`. The **entire**
+  hyperparameter delta old→new is `num_envs` 21→32 and `total_timesteps` 10M→20M
+  (extracted from the embedded `hyperparameters/text_summary` of each event
+  file). The brief's expected deltas were wrong: env count was **21→32, not
+  8→32**, and `update_proportion` was **unchanged at 0.25** (not newly broken).
+- **Not the `NoisyTVWrapper` (A4, decisive).** No-patch arms (`off`,
+  `sham-remote`) fail *identically* to patched arms (`remote`, `static`) in both
+  run sets — `off` is actually the *best* arm and `sham` the worst, uncorrelated
+  with patch presence. The wrapper was present in **both** run sets (added
+  07-19), so "wrapper inserted between old and new" is false; the only code delta
+  is the 07-22 NEXT_STEP GAE fix, which is behaviour-preserving and confirmed
+  neutral by the identical curves.
+- **Premise partly inaccurate.** The new `off` run **does** leave room 1 (room 2
+  at ~4M, earlier than the old `off` s2 at ~6.4M), and a live random policy does
+  **not** leave room 1 in 4000 steps — so `off` is not "below a random policy".
+  Burda's reference numbers ("random finds the key every few 100k steps", "RND
+  finds >half the rooms") are at ~2e9 frames; these runs are 8e7 frames (~25×
+  fewer), where even Burda's RND is in the first rooms.
+- **Metric verified sound (TASK D).** `RoomTracker` reads RAM byte 3 correctly
+  and threads `rooms_visited` through the stack (live-tested); it registers 2 in
+  the runs that reached room 2, so it is not stuck-at-1 blind. The agent is
+  genuinely confined.
+- **Implementation faithful (TASK E).** Intrinsic non-episodic (`episodic=False`),
+  return-std (not reward-std) normalisation, obs-norm init by random rollout, and
+  the GAE fix are all correct. The "~20× intrinsic collapse" is the predictor
+  fitting the narrow room-1 distribution (a self-reinforcing symptom of
+  confinement), not a defect.
+
+**Root cause recorded:** a pre-existing, cross-algorithm (PPO is stuck too)
+exploration weakness driven by under-scale vs Burda + early entropy decay at the
+paper's `ent_coef=0.001`; **not** a bug and **not** introduced by any of the four
+suspected changes.
+
+**Actionable follow-up (evidence-gated, not applied):** the one real paper
+mismatch is `update_proportion=0.25` at 32 envs (Burda used keep-prob 0.25 only
+at 128 envs). Test `--update-proportion 1.0` in a ≤3M probe (V2 in
+`regression-findings.md` § Verification plan) **before** changing the default or
+spending any 20M budget — do not ship it as a fix on the strength of the argument
+alone. Reference target: escape room 1 well before 10M (so 3M probes suffice).
+
+**Hygiene actions for the next cluster runs** (surfaced by this analysis, not yet
+done): preserve **checkpoints + videos** alongside the event files (enables the
+post-hoc memorisation-gap probe F1 and direct video review A7 — both blocked here
+by their absence), and record **`pip freeze` + the commit SHA** per run (would
+close the execution-environment bisect arm mechanically instead of by inference).
+
+**Scope note:** no source files changed for this diagnosis — only `CLAUDE.md`
+(Thesis-context section) and the three docs above.
