@@ -2,6 +2,60 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Thesis context
+
+**Degree / scope.** Bachelor's thesis. Characterisation only. There is no
+method-proposal chapter; do not suggest or implement new intrinsic reward
+algorithms.
+
+**Research question.** Does the noisy-TV problem manifest for Random Network
+Distillation (RND) on `ALE/MontezumaRevenge-v5`, and what governs whether it
+does?
+
+**Why the question is not already settled.** Burda et al. (2018) argue RND
+resists stochasticity traps because the target network is a deterministic
+function of the observation. Their §2.2.1 lists four sources of prediction
+error: (1) amount of training data (epistemic), (2) stochasticity of the
+target (aleatoric), (3) model misspecification, (4) learning dynamics. RND
+obviates factors 2 and 3 because the target is deterministic and inside the
+predictor's model class. A noise patch therefore does **not** reintroduce
+factor 2. It attacks through factors 1 and 4: every patched frame is
+genuinely under-sampled, so the intrinsic reward it generates is
+correctly-computed novelty that happens to be semantically empty, and whether
+SGD removes it within budget is an open empirical question.
+
+**Primary hypothesis (H1).** RND's resistance to a controllable stochastic
+observation source is not structural but contingent on predictor
+generalisation, governed by the *memorisation gap*
+`G = E[err(freshly sampled patch)] − E[err(currently displayed patch)]`.
+Behavioural capture requires `G > 0` sustained. If the predictor sits at the
+conditional-mean solution, `G = 0`, every patch content is equally rewarding,
+and no capture can occur regardless of stimulus strength.
+
+**Sub-predictions.**
+- P1 (signal): `tv_intrinsic_share` elevated early in `remote`/`static`
+  relative to the `off`/`sham` floor, decaying over training. Falsified by a
+  flat, non-decaying share.
+- P2 (behaviour): `tv_action_frac` in `remote` does not sustainably exceed the
+  `sham-remote` rate. Falsified by a sustained excess (= behavioural capture).
+  **The null is `sham-remote`, never chance (1/19).**
+- P3 (mechanism): `G` is non-monotonic in refresh interval — near zero at
+  per-step resampling and at a frozen patch, maximal in between.
+- P4 (cost): `rooms_visited` / `episodic_return` reported descriptively only;
+  seed count does not support inferential claims.
+
+**Conditions.** `off` (18 actions, no patch) · `remote` (19 actions, patch
+resampled when action 18 chosen) · `sham-remote` (19 actions, no patch —
+controls for the action-space change) · `frozen` (18 actions, patch present
+but never resampled — controls for HUD occlusion) · `static` (18 actions,
+patch resampled every `T` steps — signal degradation without a behavioural
+channel).
+
+**Current blocker.** All four completed 20M-step / 32-env runs
+(`off`, `remote`, `sham`, `static`, one seed each) have failed to leave room 1.
+The `off` baseline is therefore underperforming a random policy and every arm
+is uninterpretable. Diagnosing this is the sole active priority.
+
 ## Project Purpose
 
 Bachelor thesis: testing and comparing exploration algorithms for playing and solving **Montezuma's Revenge** via the Arcade Learning Environment (ALE). Target environment: `ALE/MontezumaRevenge-v5`.
