@@ -1,5 +1,10 @@
 # Noisy-TV results & the deadline path
 
+> **⚠️ Read `doc/thesis-framing-notes.md` first** — it carries the load-bearing
+> interpretation corrections (self-limiting capture; P1-as-worded falsified but
+> H1 not; the curiosity-diversion argument for Montezuma; the first-key
+> milestone). This doc is the data; that doc is how to frame it for the thesis.
+
 Companion to `doc/run-analysis.md` / `doc/regression-findings.md`. Those establish
 that the room-1 confinement is not a bug and not a blocker on the research
 question. **This doc extracts the actual noisy-TV result from the data you already
@@ -30,15 +35,16 @@ panel single-seed; see the caveat at the end).
 | `remote` (s42)      | +0.174       | **+0.144** | **elevated, non-decaying** |
 | `static` (s1)       | +0.255       | **+0.204** | **elevated, non-decaying** |
 
-**Verdict: P1 holds in its "elevated" part, and its "decaying over training" part
-is falsified — the share does NOT decay.** The patch's share of intrinsic reward
-climbs early and then *stays* at +0.14 (`remote`) / +0.20 (`static`), far above
-the ~−0.05 `off`/`sham` floor, for the full run. Per P1's own criterion
-("Falsified by a flat, non-decaying share") the non-decay is the finding, and it
-is exactly what H1 predicts when the predictor never memorises the per-step-
-resampled patch (`G` stays > 0-ish / the patch stays a permanent residual-error
-source). So the noise patch **is** a durable, non-vanishing draw on RND's
-intrinsic reward — signal capture is real.
+**Verdict: P1 *as worded* is falsified; H1 is not (see `doc/thesis-framing-notes.md` §2).**
+P1 predicts the share is elevated **and decays**; its falsifier is "a flat,
+non-decaying share." The share is elevated and **non-decaying — it rises** and
+plateaus (~+0.14 `remote`, ~+0.20 `static`) vs the ~−0.05 `off`/`sham` floor. So
+P1's falsifier is met. This does **not** sink H1: the predictor can't drive the
+*raw* patch error to zero (per-pixel noise is unpredictable → share stays high,
+and rises as the rest of the frame is learned), while the *gap* `G` can still be
+~0 (content-invariant). The rising share is a real signal-side finding — **the TV
+increasingly dominates the curiosity budget** — but whether `G ≈ 0` (H1) needs
+the content-sensitivity probe. Do **not** report the rising share as confirming P1.
 
 ### P2 — behavioural capture: `charts/tv_action_frac` (null = `sham`, not chance)
 
@@ -47,13 +53,17 @@ intrinsic reward — signal capture is real.
 | `remote` (s42)      | **0.328** (~4–5M) | **0.009** | transient spike, then **below** sham/chance |
 | `sham-remote` (s42) | 0.063 (early)     | **0.000** | never presses |
 
-**Verdict: no *sustained* behavioural capture.** `remote` briefly presses the TV
-remote at ~0.33 (6× chance, far above `sham`) around 4–5M, then abandons it and
-decays to ~0.009 — *below* both chance (0.053) and the `sham` rate. Against the
-correct null (`sham`, per your plan), P2's "does not sustainably exceed sham" is
-**upheld**, with an interesting transient worth reporting: the agent *tries* the
-remote, gets no lasting advantage, and drops it — consistent with the intrinsic
-reward being (near-)invariant to which patch is displayed (§2).
+**Verdict: self-limiting capture (outcome 3), not resistance.** `remote` presses
+the TV remote at ~0.33 (6× chance, far above `sham`) around 4–5M, then decays to
+~0.009 — below both chance (0.053) and `sham`. The thesis defines the three
+outcomes by trajectory shape (resistance = no rise, capture = rise persists,
+**self-limiting = rise that decays**, §3.5): a rise-then-decay well above the
+`sham` null is exactly self-limiting capture — the middle outcome the methodology
+warns is "easy to miss if only the start of training is looked at." P2's literal
+"no *sustained* excess over sham" is upheld, but the transient rise means the
+correct label is self-limiting capture, **not** resistance. (An earlier draft of
+this doc mislabeled it as "null upheld / no capture" — corrected; see
+`doc/thesis-framing-notes.md` §1.)
 
 ### The combined story (already a complete answer to the RQ)
 
