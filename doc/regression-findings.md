@@ -124,7 +124,30 @@ argument for testing `1.0` — but the change is still gated on evidence.)
 
 ---
 
-## Verification plan
+## Priority with a fixed deadline (5 days, results still needed)
+
+The exploration probes below chase P4 (exploration *cost*), which the plan scoped
+as descriptive-only — they are **not** the fastest path to the thesis's actual RQ
+(P1/P2/H1). With a hard deadline the priority order is:
+
+1. **Extract P1/P2 from the existing event files** (already largely done — see
+   `doc/run-analysis.md` A5 / the `analysis/` set): signal capture
+   (`tv_intrinsic_share` elevated + non-decaying in remote/static vs the off/sham
+   floor) and behavioural capture (`tv_action_frac` transient spike then below
+   the `sham` rate). **This answers the RQ in room 1 — leaving room 1 is not
+   required.**
+2. **Run `scripts/probe_patch_response.py` on the 10M seed-42 checkpoints** (all
+   four categories) for the H1 mechanism read (patch contribution +
+   content-sensitivity + `G_proxy` at T=1). No new training.
+3. **Report room-1 confinement as a disclosed limitation on P4 only.**
+4. *Optional, only if time:* a 2nd-seed replication of the 10M matrix (for
+   robustness, background) and/or a minimal refresh sweep for P3 (needs the
+   frozen/T=∞ code — a stretch in 5 days).
+
+The exploration probes (`slurm/run_rnd_probe.slurm`) are a **diagnostic for later**,
+not the deadline path — my earlier framing over-weighted them.
+
+## Verification plan (exploration — deprioritised vs the above)
 
 Runs must run on the cluster/GPU (the dev box has no GPU and its shell resolves a
 mismatched `gymnasium`; only `./.venv/bin/python` imports ALE cleanly, and CPU
@@ -265,7 +288,7 @@ for approval.**
 
 | # | required by | gap | notes |
 |---|-------------|-----|-------|
-| F1 | H1 / P3 | **`charts/tv_memorisation_gap` probe** measuring `G = E[err(freshly sampled patch)] − E[err(currently displayed patch)]` on the *same* underlying frames | Not present. The existing `tv_intrinsic_share` (occlusion diagnostic, `rnd.py:545–555`) measures a *different* quantity (occluded-vs-full error, i.e. how much of the signal the patch region contributes), **not** the fresh-vs-displayed gap H1 is defined on. `G` is the actual test of H1 and is **computable post-hoc from checkpoints** — but **no checkpoints were saved into `analysis/`**, so it cannot be back-computed from the existing runs; either re-copy the cluster checkpoints or fold the probe into the next runs. |
+| F1 | H1 / P3 | post-hoc predictor patch-response / `G` measurement | **Now provided: `scripts/probe_patch_response.py`** (built + validated end-to-end on a real checkpoint 2026-07-26). Given the 10M seed-42 checkpoints that exist for all 4 categories, it measures — with NO new training — `patch_contribution` (per-checkpoint version of `tv_intrinsic_share`), `content_sensitivity` (is the predictor at the content-invariant conditional-mean / H1 `G=0` solution?), and `G_proxy`. **Caveat:** all seed-42 runs used `--tv-refresh-every 1`, where no patch persists to be memorised, so `G_proxy ≈ 0` is *expected* (the T=1 end of P3's non-monotonic `G(T)` curve, not a falsification). The full non-monotonic `G(T)` still needs the refresh sweep (F3/F4) — new runs + the frozen/T=∞ code — which is the one place new runs would add thesis value. |
 | F2 | P3 / stimulus design | **Offline stimulus-calibration script**: measures Δ prediction error per candidate patch design against a reference scale (the err-gap between well-visited and rarely-visited *rooms*) | Not present. `scripts/check_noisy_tv.py` only verifies determinism/geometry; `analyze_runs.py` only overlays finished runs. The 07-19 `decisions.md` note ("area is the only stimulus lever; a 12×12 patch ≈ 1% of error") was found by an *ad-hoc checkpoint probe*, not a reusable script — that probe is exactly what F2 should become. |
 | F3 | conditions list | **`frozen` mode** (18 actions, patch present, never resampled — HUD-occlusion control) | Not a named mode. Expressible *approximately* as `static` with a very large `--tv-refresh-every` (patch drawn once at `reset`, then effectively never resampled within an episode), **but** `check_tv_geometry` requires `refresh_every ≥ 1` and there is no `∞` sentinel, and `static` still redraws a *new* patch at each episode reset (frozen should keep one fixed patch). Needs either a real `frozen` mode or a `refresh_every=∞` path + a "draw once, keep" flag. |
 | F4 | P3 sweep | **`--tv-refresh-every` sweep for T ∈ {1, 64, ∞}** | `T=1` and `T=64` already work (`static` mode). **`T=∞` is not expressible** (int ≥ 1). Blocks the "frozen end" of the P3 non-monotonicity sweep; tied to F3. |
