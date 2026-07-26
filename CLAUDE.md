@@ -2,6 +2,60 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Thesis context
+
+**Degree / scope.** Bachelor's thesis. Characterisation only. There is no
+method-proposal chapter; do not suggest or implement new intrinsic reward
+algorithms.
+
+**Research question.** Does the noisy-TV problem manifest for Random Network
+Distillation (RND) on `ALE/MontezumaRevenge-v5`, and what governs whether it
+does?
+
+**Why the question is not already settled.** Burda et al. (2018) argue RND
+resists stochasticity traps because the target network is a deterministic
+function of the observation. Their §2.2.1 lists four sources of prediction
+error: (1) amount of training data (epistemic), (2) stochasticity of the
+target (aleatoric), (3) model misspecification, (4) learning dynamics. RND
+obviates factors 2 and 3 because the target is deterministic and inside the
+predictor's model class. A noise patch therefore does **not** reintroduce
+factor 2. It attacks through factors 1 and 4: every patched frame is
+genuinely under-sampled, so the intrinsic reward it generates is
+correctly-computed novelty that happens to be semantically empty, and whether
+SGD removes it within budget is an open empirical question.
+
+**Primary hypothesis (H1).** RND's resistance to a controllable stochastic
+observation source is not structural but contingent on predictor
+generalisation, governed by the *memorisation gap*
+`G = E[err(freshly sampled patch)] − E[err(currently displayed patch)]`.
+Behavioural capture requires `G > 0` sustained. If the predictor sits at the
+conditional-mean solution, `G = 0`, every patch content is equally rewarding,
+and no capture can occur regardless of stimulus strength.
+
+**Sub-predictions.**
+- P1 (signal): `tv_intrinsic_share` elevated early in `remote`/`static`
+  relative to the `off`/`sham` floor, decaying over training. Falsified by a
+  flat, non-decaying share.
+- P2 (behaviour): `tv_action_frac` in `remote` does not sustainably exceed the
+  `sham-remote` rate. Falsified by a sustained excess (= behavioural capture).
+  **The null is `sham-remote`, never chance (1/19).**
+- P3 (mechanism): `G` is non-monotonic in refresh interval — near zero at
+  per-step resampling and at a frozen patch, maximal in between.
+- P4 (cost): `rooms_visited` / `episodic_return` reported descriptively only;
+  seed count does not support inferential claims.
+
+**Conditions.** `off` (18 actions, no patch) · `remote` (19 actions, patch
+resampled when action 18 chosen) · `sham-remote` (19 actions, no patch —
+controls for the action-space change) · `frozen` (18 actions, patch present
+but never resampled — controls for HUD occlusion) · `static` (18 actions,
+patch resampled every `T` steps — signal degradation without a behavioural
+channel).
+
+**Current blocker.** All four completed 20M-step / 32-env runs
+(`off`, `remote`, `sham`, `static`, one seed each) have failed to leave room 1.
+The `off` baseline is therefore underperforming a random policy and every arm
+is uninterpretable. Diagnosing this is the sole active priority.
+
 ## Project Purpose
 
 Bachelor thesis: testing and comparing exploration algorithms for playing and solving **Montezuma's Revenge** via the Arcade Learning Environment (ALE). Target environment: `ALE/MontezumaRevenge-v5`.
@@ -192,6 +246,16 @@ scalars = ea.Tags()["scalars"]          # list of available metric names
 steps, vals = zip(*[(e.step, e.value) for e in ea.Scalars("charts/episodic_return")])
 ```
 
+**Batch overlay + summary pipeline** — `scripts/analyze_runs.py` wraps the `EventAccumulator` parsing above for whole-batch comparison. Point it at a directory whose immediate subdirectories are runs; it writes overlaid per-metric charts (all runs on shared axes) plus a multi-panel `_overview.png` into `<logdir>/figures/`, and a derived-events table — when each agent left room 1, room-2 episode counts, peak intrinsic reward, final entropy, TV intrinsic share, explained variance, … — into `<logdir>/summary.md` and `summary.csv`:
+
+```bash
+source .venv/bin/activate
+python scripts/analyze_runs.py --logdir analysis     # default --logdir is analysis; --out overrides the figures dir
+tensorboard --logdir analysis                        # same runs, interactive overlay
+```
+
+Works on any run set (e.g. `--logdir runs`). Caveat it encodes: `charts/rooms_visited` is a *per-episode* distinct-room count (resets every episode), so it reads flat at 1 even when a run does occasionally reach room 2 — read the generated `figures/charts__rooms_furthest_cummax.png` (cumulative furthest room reached) for exploration over time. `analysis/` (6 completed 10M noisy-TV runs + `README.md`) is the worked example this was built for.
+
 **Key metrics to check when diagnosing a failed RND run:**
 
 | Metric | Healthy sign | Failure sign |
@@ -252,7 +316,7 @@ reflects Bellemare's numbers specifically.
 - `examples/` — lightweight, standalone reference scripts; keep up to date with current ale_py/gymnasium API
 - `doc/` — investigation write-ups and usage guides (`running-agents.md`, `throughput-investigation.md`, `decisions.md`, `pipeline-history.md`, `hpc-onboarding.md`, `matched-budget-submission.md`, `10M-RND-run-failure-documentation.md`, `rnd-vs-ppo-asymmetry-investigation.md`, `noisy-tv-experiment.md`). **`noisy-tv-experiment.md` is the current/main thesis experiment** (design, metrics, run matrix); `rnd-vs-ppo-asymmetry-investigation.md`, `matched-budget-submission.md`, and `10M-RND-run-failure-documentation.md` are **background/superseded** (see "Current focus" above)
 - `slurm/` — SLURM job scripts for cluster training runs: `run_rnd_smoke.slurm`/`run_ppo_smoke.slurm` (infrastructure smoke tests, minutes-scale, run these first — see `doc/hpc-onboarding.md`), `run_rnd.slurm`/`run_ppo.slurm` (production runs, hours-scale), `run_count_based.slurm` (production, count-based pipeline still under separate setup by the user). `run_rnd_falsify.slurm` was removed 2026-07-14 — its ent_coef hypothesis was reverted (see `doc/decisions.md`) and it was repurposed into `run_rnd_smoke.slurm`. `run_rnd_tv.slurm`/`run_ppo_tv.slurm` run the noisy-TV experiment matrix (10M steps / 8 envs, `TV_MODE` env var selects the condition — see `doc/noisy-tv-experiment.md`).
-- `scripts/` — utility scripts, e.g. `profile_throughput.py` for measuring training SPS, `check_noisy_tv.py` for the noisy-TV wrapper's deterministic self-checks (run before any TV production submission)
+- `scripts/` — utility scripts, e.g. `profile_throughput.py` for measuring training SPS, `check_noisy_tv.py` for the noisy-TV wrapper's deterministic self-checks (run before any TV production submission), `analyze_runs.py` for overlay-comparing a batch of TensorBoard runs and emitting a derived-events summary (see “Log Analysis”)
 - `.claude/skills/` — Claude Code skill definitions (see below)
 - `cartpole-training/`, `_static/` — gitignored; training videos/static assets from the CartPole recording example, not relevant to the main project and may not exist in a fresh checkout
 
