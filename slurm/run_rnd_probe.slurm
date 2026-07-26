@@ -2,7 +2,7 @@
 #SBATCH --job-name=montezuma-rnd-probe
 #SBATCH --output=slurm-logs/%x_%j.out
 #SBATCH --error=slurm-logs/%x_%j.err
-#SBATCH --time=02:30:00
+#SBATCH --time=05:00:00
 #SBATCH --partition=Debug_node
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=32
@@ -11,32 +11,49 @@
 #SBATCH --ntasks=1
 
 # ── RND "leave room 1" PROBE runner ──────────────────────────────────────────
-# Short (<=5M step) diagnostic runs to find a config that reliably gets RND out
-# of room 1, BEFORE committing any 20M-step budget. See doc/regression-findings.md
-# ("Verification plan") and doc/run-analysis.md for why the 20M/32-env runs stall
-# in room 1 (no bug/regression; under-scale + LR annealing to 0 + quartered
-# predictor batch at 32 envs). Reference target: escape room 1 well before 10M,
-# so <=5M is a valid read.
+# Diagnostic runs (default 10M steps) to find whether ANY 32-env config gets RND
+# reliably out of room 1, BEFORE committing a full production matrix. See
+# doc/regression-findings.md ("Verification plan") and doc/run-analysis.md for why
+# the 20M/32-env runs stall in room 1 (no bug/regression; under-scale). Budget
+# note: the runs that DID escape did so at ~4-6.4M, so a probe must clear ~8-10M
+# to distinguish "reaches room 2 repeatedly" from "one lucky episode" — 5M is too
+# short (it sits on the escape threshold and misses the ~6.4M case).
 #
-# This script is the run_rnd_tv.slurm boilerplate with the three probe levers
-# exposed as env-var overrides, all defaulting to the CURRENT production values
-# (so an unset invocation reproduces today's config):
+# HONEST framing (read doc/regression-findings.md § Verification plan): the
+# escape mechanism is stochastic coverage of near-exit states, reinforced by
+# novelty, before entropy decays — it scales with ENVS x FRAMES x exploratory
+# window, NOT with predictor bookkeeping. So the highest-leverage knobs here are
+# NUM_ENVS (capped at 32 on this cluster) and TOTAL_TIMESTEPS (runs that escaped
+# did so at ~4-6.4M, so budget must clear ~8-10M to see room 2 REPEATEDLY). The
+# config levers below are "healthier RND / longer exploratory window", not a
+# guaranteed escape mechanism — a null result on them is itself the finding that
+# scale is the binding constraint.
 #
-#   UPDATE_PROPORTION   fraction of the minibatch used to train the RND predictor.
-#                       Current 0.25 was Burda's 128-env value; at 32 envs the
-#                       32-env reference is 1.0 (4x the effective predictor batch).
-#   ANNEAL_LR           1/on/true keeps the linear LR->0 anneal (current default);
-#                       0/off/false passes --no-anneal-lr (constant LR, Burda-aligned)
+# This script is the run_rnd_tv.slurm boilerplate with the probe levers exposed
+# as env-var overrides, all defaulting to CURRENT production values (so an unset
+# invocation reproduces today's config):
+#
+#   NUM_ENVS            parallel actors = stochastic coverage. THE mechanistic
+#                       lever. 32 = the node's cores/GPU; >32 oversubscribes (see
+#                       note below) but buys more coverage per predictor update.
+#   ENT_COEF            entropy bonus (current 0.001 = paper). Higher keeps the
+#                       policy stumbling longer (delays the decay-to-deterministic).
+#                       Caveat: high-entropy alone = random-level escape (the PPO
+#                       control proves it), so this only helps in combination.
+#   UPDATE_PROPORTION   minibatch fraction training the RND predictor. Current
+#                       0.25 was Burda's 128-env value; the 32-env reference is
+#                       1.0 (4x effective predictor batch). Hygiene, not a
+#                       mechanism — cleaner novelty, no gradient toward the exit.
+#   ANNEAL_LR           1/on keeps the linear LR->0 anneal (current default);
+#                       0/off passes --no-anneal-lr (constant LR, Burda-aligned)
 #                       so the back half of a run still learns.
-#   EXT_COEF            weight of the extrinsic advantage (current 2.0). Set 0 for
-#                       a pure-intrinsic sanity probe (the arm that should escape
-#                       room 1 earliest if RND is working at all).
+#   EXT_COEF            extrinsic advantage weight (current 2.0). 0 = pure-intrinsic
+#                       sanity (extrinsic is ~0 anyway, so this changes little).
 #
-# Plus the usual TV_MODE / NUM_ENVS / TOTAL_TIMESTEPS / SEED / EXP_NAME /
-# RESUME_FROM overrides. Probes default to TV_MODE=off (get the BASELINE exploring
-# first; only once a recipe clears room 1 on off is it worth re-running remote/
-# sham/static with it — otherwise the TV arms have no non-floored baseline to be
-# measured against).
+# Plus TV_MODE / TOTAL_TIMESTEPS / SEED / EXP_NAME / RESUME_FROM. Probes default
+# to TV_MODE=off (get the BASELINE exploring first; only once a recipe clears
+# room 1 on off is it worth re-running remote/sham/static — otherwise the TV arms
+# have no non-floored baseline to be measured against).
 #
 # NUM_ENVS note: --cpus-per-task above is 32 (the node's cores/GPU). NUM_ENVS>32
 # oversubscribes (AsyncVectorEnv spawns one subprocess per env) — it still runs,
@@ -44,12 +61,12 @@
 # probe; drop the 64-env cell if it will not schedule on your partition.
 #
 # Usage (submit from the project root):
-#   # P0 baseline (reproduce current config)
-#   sbatch --export=ALL,EXP_NAME=rnd_probe_baseline,SEED=1,TOTAL_TIMESTEPS=3000000 slurm/run_rnd_probe.slurm
-#   # P1 primary bet: update_proportion=1.0 + constant LR
-#   sbatch --export=ALL,EXP_NAME=rnd_probe_up1_noanneal,SEED=1,TOTAL_TIMESTEPS=5000000,UPDATE_PROPORTION=1.0,ANNEAL_LR=0 slurm/run_rnd_probe.slurm
-#   # P3 pure-intrinsic sanity
-#   sbatch --export=ALL,EXP_NAME=rnd_probe_pure_int,SEED=1,TOTAL_TIMESTEPS=3000000,UPDATE_PROPORTION=1.0,ANNEAL_LR=0,EXT_COEF=0 slurm/run_rnd_probe.slurm
+#   # A baseline (reproduce current config at a budget that clears the escape point)
+#   sbatch --export=ALL,EXP_NAME=rnd_probe_baseline,SEED=1,TOTAL_TIMESTEPS=10000000 slurm/run_rnd_probe.slurm
+#   # B healthier-RND + longer window: update_proportion=1.0 + constant LR + 10x entropy
+#   sbatch --export=ALL,EXP_NAME=rnd_probe_explore,SEED=1,TOTAL_TIMESTEPS=10000000,UPDATE_PROPORTION=1.0,ANNEAL_LR=0,ENT_COEF=0.01 slurm/run_rnd_probe.slurm
+#   # C scale (the real lever, if the partition allows >32 envs)
+#   sbatch --export=ALL,EXP_NAME=rnd_probe_env64,SEED=1,TOTAL_TIMESTEPS=10000000,NUM_ENVS=64,UPDATE_PROPORTION=1.0,ANNEAL_LR=0,ENT_COEF=0.01 slurm/run_rnd_probe.slurm
 #
 # Or fire the whole matrix at once: bash slurm/submit_rnd_probes.sh
 #
@@ -101,8 +118,8 @@ EXP_NAME="${EXP_NAME:-rnd_probe_${TV_MODE}}"
 
 echo "── probe config ──────────────────────────────────────────────"
 echo "  exp_name=${EXP_NAME}  tv_mode=${TV_MODE}  seed=${SEED:-1}"
-echo "  total_timesteps=${TOTAL_TIMESTEPS:-3000000}  num_envs=${NUM_ENVS:-32}"
-echo "  update_proportion=${UPDATE_PROPORTION:-0.25}  ext_coef=${EXT_COEF:-2.0}"
+echo "  total_timesteps=${TOTAL_TIMESTEPS:-10000000}  num_envs=${NUM_ENVS:-32}"
+echo "  update_proportion=${UPDATE_PROPORTION:-0.25}  ext_coef=${EXT_COEF:-2.0}  ent_coef=${ENT_COEF:-0.001}"
 echo "  anneal_lr_args=${ANNEAL_ARGS[*]}"
 echo "──────────────────────────────────────────────────────────────"
 
@@ -110,11 +127,12 @@ python src/agents/rnd.py \
     --env-id ALE/MontezumaRevenge-v5 \
     --exp-name "$EXP_NAME" \
     --tv-mode "$TV_MODE" \
-    --total-timesteps "${TOTAL_TIMESTEPS:-3000000}" \
+    --total-timesteps "${TOTAL_TIMESTEPS:-10000000}" \
     --num-envs "${NUM_ENVS:-32}" \
     --seed "${SEED:-1}" \
     --update-proportion "${UPDATE_PROPORTION:-0.25}" \
     --ext-coef "${EXT_COEF:-2.0}" \
+    --ent-coef "${ENT_COEF:-0.001}" \
     "${ANNEAL_ARGS[@]}" \
     --capture-video \
     --record-room-discovery \

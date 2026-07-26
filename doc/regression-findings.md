@@ -126,26 +126,43 @@ argument for testing `1.0` — but the change is still gated on evidence.)
 
 ## Verification plan
 
-All runs are **probes (≤3M steps)**, not full 20M runs, and must run on the
-cluster/GPU (the dev box has no GPU and its shell resolves a mismatched
-`gymnasium`; only `./.venv/bin/python` imports ALE cleanly, and CPU training is
-far too slow for a 3M-step probe). Reference target from the brief: **the agent
-should escape room 1 well before 10M steps** — so 3M is a valid read.
+Runs must run on the cluster/GPU (the dev box has no GPU and its shell resolves a
+mismatched `gymnasium`; only `./.venv/bin/python` imports ALE cleanly, and CPU
+training is far too slow). **Budget: 10M, not ≤3M.** The runs that *did* escape
+did so at **~4M (new `off`) and ~6.4M (old `off` s2)**, so a probe must clear
+**~8–10M** to distinguish "reaches room 2 *repeatedly*" from "one lucky episode";
+a 3–5M cutoff sits on the escape threshold and misses the 6.4M case. At ~1320 SPS
+(32 env, A100) 10M ≈ 2.1 h — still a diagnostic, not a production run.
 
-| # | probe | setting | confirmation criterion |
-|---|-------|---------|------------------------|
-| V1 | **reproduce** | current code, `rnd off`, 32 env, 3M, seed 42 | matches the 20M `off` shape in the first 3M (entropy→~0.6, intermittent room-2). Confirms the analysis harness. |
-| V2 | **update_proportion** | as V1 but `--update-proportion 1.0`, seeds 42+1 | **improvement** = higher/again-rising `raw_intrinsic_rew_mean` late, later entropy decay, and room-2 reached earlier/more often than V1. Null = no change ⇒ `0.25` was not the lever. |
-| V3 | **seed variance** | current code, `rnd off`, 3M, seeds 1/2/3 | quantifies how much of "reaches room 2 or not" is seed noise (A5 shows it is large). Sets the descriptive-only bar P4 already assumes. |
-| V4 | **pure-intrinsic sanity** | `rnd off`, `--ext-coef 0`, 3M | Burda's `ext_coef=0` "finds >half the rooms" claim is the one that should hold *earliest*; if pure-intrinsic RND also cannot leave room 1 by 3M, the weakness is scale/optimization, not the ext/int mixing. |
+**Mechanism caveat (important).** Escape = stochastic coverage of near-exit
+states, reinforced by novelty, *before* entropy decays — it scales with **envs ×
+frames × exploratory window**, not with predictor bookkeeping. So the config
+levers below are "healthier RND / longer window", **not** a guaranteed escape
+mechanism; the one lever with a real mechanism is **more envs** (capped at 32
+here). A *null* result across the 32-env levers is itself the finding — it
+confirms scale is the binding constraint, which (characterisation-only scope) is
+documented as a limitation rather than engineered around.
 
-A result that would count as "fixed / explained": V2 shows a clear,
-seed-robust improvement (root cause = under-trained predictor from
-`update_proportion`), **or** V1/V3/V4 all reproduce the weak-but-not-broken
-behaviour with large seed variance and no config fixes it at 3M (root cause =
-under-scale + entropy dynamics; the correct response is *more envs/frames or an
-exploration-schedule change*, not a code fix — and, per the thesis's
-characterisation-only scope, is reported descriptively rather than "solved").
+Launcher: `slurm/run_rnd_probe.slurm` + `slurm/submit_rnd_probes.sh` (all
+`TV_MODE=off` — get the baseline exploring first; re-run remote/sham/static with
+the winning flags only once `off` clears room 1).
+
+| cell | setting | what it tests / confirmation criterion |
+|------|---------|----------------------------------------|
+| **A — baseline** | current config, 10M, seeds 1,2 | real escape-rate reference at a fixed budget; expected ≈ the 20M `off` shape (intermittent room 2, entropy→~0.4). |
+| **B — explore** | `--update-proportion 1.0 --no-anneal-lr --ent-coef 0.01`, 10M, seeds 1,2 | bundled "healthier predictor + sustained learning + wider exploratory window". **PASS** = room 2 reached *repeatedly* across both seeds, earlier/more often than A. If B≫A, isolate which of the three did it (follow-up). If B≈A, config is not the lever. |
+| **C — scale** (opt-in) | B + `--num-envs 64`, 10M, seed 1 | the mechanistic lever — more parallel actors = more stumbling into near-exit states. Only if the partition schedules >32 envs (oversubscribes 32 cores). |
+| **D — pure-intrinsic** | `--ext-coef 0 --update-proportion 1.0`, 8M, seed 1 | Burda's `ext_coef=0` should escape *earliest* if RND works at all; if it can't by 8M, the weakness is scale/optimization, not ext/int mixing. |
+
+A result that would count as "explained": **B or C shows a clear, seed-robust
+lift** in escape rate (→ that lever is the fix, re-apply to the TV matrix),
+**or** all cells reproduce the weak-but-not-broken behaviour with large seed
+variance and nothing at 32 envs clears room 1 *repeatedly* (→ under-scale is the
+binding constraint; the honest response is more envs/frames — not a code fix —
+reported descriptively per the characterisation-only scope). The realistic
+expectation, given the mechanism and that even the high-entropy PPO control only
+reaches room 2 occasionally, is that the config-only cells (A, B, D) will **not**
+robustly clear room 1 and that **C (scale)** is where movement, if any, appears.
 
 ---
 
