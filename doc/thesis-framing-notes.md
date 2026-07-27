@@ -265,6 +265,107 @@ compute envelope, not merely a budget choice, blocks the 128-env regime.
 
 ---
 
+## ⚠️ Closest prior work — Jarrett et al., "Curiosity in Hindsight" (ICML 2023) — verified positioning
+
+Full paper read 2026-07-27 (arXiv 2211.10515v2; Jarrett, Tallec, Altché, Mesnard,
+Munos, Valko; DeepMind). **This must be cited prominently in Related Work — it is
+the closest prior work, and it *strengthens* the thesis's motivation.** Verified
+facts (with locations), then the honest differentiation.
+
+### What they did (verified against the PDF)
+
+- **Pycolab maze, 4 stochasticity settings** (§5.1, Fig 6; 100k learner steps, 3
+  seeds, 500-step episodes; trackers R1–R4 behind oscillating blocks; 5×5 obs):
+  - *No noise:* "All algorithms reach all four trackers (with RND eventually
+    losing interest due to vanished rewards, as the environment is small)."
+    Appendix B.8 has a dedicated RND paragraph: RND "is simply learning a mapping
+    from x_{t+1} to f_random(x_{t+1})... it much more quickly 'loses interest'
+    due to vanished rewards" — a **vanishing-rewards** account, not a noise failure.
+  - *Brownian oscillators (state-dependent):* "BYOL-Hindsight and RND both still
+    explore the entire maze"; RND shown "in principle resilient to noise, as its
+    targets are deterministic." → The deterministic-target firewall **holds** for
+    structured state-dependent noise.
+  - *Random pixel noise (iid, p=0.25/frame, full extra layer):* "both BYOL-Explore
+    and RND do worse as the noise is an entire layer of random pixels (i.e.
+    extremely diffuse), which outcompetes all other dynamics of the world in
+    magnitude."
+  - *On-demand pixel noise:* triggered "**whenever the no-op action is selected**"
+    — a NOOP-triggered noise channel, structurally the same trigger idea as our
+    `remote` (!). Result: "Even RND suffers greatly, which makes sense because
+    the agent is no longer guaranteed a 0.75 probability of observing the world's
+    unpolluted dynamics." That is their **entire** RND analysis of this case — a
+    *dilution* explanation, one clause, no action statistics, no seeking measure.
+- **Atari:** Bank Heist (natural traps + sticky actions, §5.2), **Montezuma with
+  sticky actions 0.1** + non-sticky baseline (§5.3), 10 hard-exploration games
+  (§5.4), and — important — **"Persistive Noise" on Montezuma** (§5.5 + App. B.2):
+  an **additive full-frame 84×84 noise layer, per-pixel random walk** (mod-50 on
+  top of the observation), step size ±1 or ±11 depending on the **parity of the
+  previous action's key code** — i.e. action-dependent AND persistent. Their
+  design rationale: prior pixel noise was non-additive or non-persistent, so a
+  representation could "simply 'ignore' the noise. This is not possible in our
+  setting." **RND appears in the persistive-noise figures (11–12) but the B.2
+  text analyzes only BYOL-Explore vs BYOL-Hindsight** ("BYOL-Explore suffers
+  greatly..., BYOL-Hindsight is more resilient") — not one sentence on RND.
+- **How RND is treated throughout:** a reference baseline ("implemented exactly
+  as described in [BYOL-Explore]"), 3M learner steps, 3 seeds, VMPO harness with
+  **400 CPU actors + 4 TPUv2 per run** (App. C.3). Their theory-level account of
+  RND-under-noise is §2.2 pt. 2 + Table 1: deterministic-input methods are "in
+  principle resilient to stochasticity. But empirically they can still behave
+  poorly in the presence of action-dependent stochasticities: If the noise is
+  sufficiently diffuse, the agent may never learn the function well... they may
+  still become stuck."
+
+### What they did NOT do (the thesis's space, verified absent)
+
+1. **RND is never the object of study** — no experiment or analysis section is
+   about RND; every RND result is a curve plus at most one explanatory clause.
+2. **No capture-channel decomposition.** They measure aggregate exploration
+   (trackers / rooms / returns) only. No equivalent of `tv_intrinsic_share`
+   (where does the intrinsic budget go?) and no equivalent of `tv_action_frac`
+   (does the agent *seek* the noise?). Their "suffers greatly" cannot distinguish
+   **dilution** (their stated explanation) from **behavioural capture** — our
+   design separates exactly this, and finds *self-limiting capture*, a category
+   their instruments cannot express.
+3. **No action-space-matched control** (our `sham-remote`) and no
+   signal-only ablation (our `static`); no controllable refresh/dose dial (P3).
+4. **No predictor-level probe of RND** — no memorisation gap, no
+   content-invariance / conditional-mean concept, no early-vs-late trajectory.
+   (Their App. B.6 pixel-error visualisation is the closest cousin — but it probes
+   *their own* world-model functions on a bottom-strip noise setting, not RND.)
+5. **No Burda-scale RND either.** Their RND is a 3M-learner-step reimplementation
+   inside the BYOL-Explore harness — the "big researchers did the full runs"
+   worry is softer than assumed: nobody in this paper runs Burda's 128-env/2B-frame
+   RND regime. Their resource advantage (400 actors + TPUs) bought breadth of
+   settings, not the RND scale regime.
+
+### How to use it in the thesis
+
+- **Related Work:** closest prior work. One honest paragraph: they observe RND
+  degradation under diffuse and action-dependent noise (maze) and propose a
+  hindsight-based fix; they do **not** study RND as the object, decompose capture
+  channels, control the action-space change, probe the predictor, or vary the
+  dose. This thesis does exactly that, on the game the immunity claim targets.
+- **Motivation:** their Table-1/§2.2 tension — RND "in principle resilient" yet
+  empirically degraded — is published support that the immunity question is open.
+  Their Brownian-vs-pixel contrast (firewall holds for structured noise, fails
+  for unlearnable iid noise) independently corroborates the factor-1 rerouting
+  reading (Burda's factor 2 eliminated; attack survives via factors 1/4).
+- **Discussion:** their one-clause dilution explanation of the on-demand case vs
+  our measured self-limiting capture — same trigger idea (NOOP-mapped), finer
+  verdict here. Their §2.2 "may never learn the function well" is an informal
+  statement of what the memorisation gap `G` formalises and the probe measures.
+- **Caveat to state:** their persistive-noise-on-Montezuma setting (global,
+  additive, always-on, action-modulated) is a *stronger stimulus* than our
+  localized patch; our result (self-limiting at T=1, 12×84 patch) does not claim
+  to predict their full-frame regime. Dose/extent dependence is exactly P3's
+  territory — a natural future-work bridge to their setting.
+- **Do not** claim "nobody injected noise into Montezuma before" — B.2 did
+  (global additive noise). The correct claim: no prior work injects a
+  **controllable, localized** noise source into Montezuma **with channel-separating
+  controls** and studies **RND's capture mechanism** through it.
+
+---
+
 ## Seed situation (realization, not a blocker)
 
 - You have a **de-facto second seed** for `off`/`remote`/`sham` (the Jupyter
