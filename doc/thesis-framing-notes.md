@@ -7,6 +7,21 @@ run data (`analysis/HPC-Runs` seed 42, `analysis/Jupyter-Pod-Runs` seed 1/2).
 Everything here is checked against the thesis's *own* definitions (§ references
 are to `03_Methodology.tex`). Companion data doc: `doc/noisy-tv-results.md`.
 
+**⚠️ Framing principle (Timo, 2026-07-27 — governs everything below):** the
+research question and P1–P4 stay **as originally worded** in the methodology. Do
+**not** adapt the questions to what the data happened to support. This is a
+bachelor thesis — an introduction to scientific practice — and a question that
+turns out to be only partly answerable, for stated resource reasons, is a fine
+outcome; what is graded is that the write-up shows the student knows what he is
+doing. Concretely: ask the question as planned → report what the data says,
+**including falsifications** → explain the mechanism in the Discussion (e.g. the
+Burda §2.2.1 factor reading: factor 2 eliminated at the deterministic target, the
+attack re-routed through factor 1 / factor 4 — interpretation, not a rewritten
+question) → disclose what could not be answered and why (scale limit for
+exploration cost; missing `frozen` mode for P3; n=1–3 seeds). Pre-registered
+falsifiers that fire, and partial answers with honest causes, are *evidence of
+competence*, not defects to reword away.
+
 Four things are load-bearing and easy to get wrong:
 
 ---
@@ -78,6 +93,12 @@ or (b) keep P1 and report the non-decaying share as a *falsification-with-
 refinement* — "the raw share does not decay (P1 falsified as stated), but the
 content-sensitivity probe shows the gap is closed, which is the mechanism P1 was
 proxying for." **Do not report the rising share as if it confirmed P1.**
+
+**Decision (2026-07-27): option (b).** Per the framing principle at the top of
+this doc, P1 stays as originally worded — rewording a prediction after seeing the
+data is exactly the retrofitting the principle rules out. Report it
+falsified-as-stated, then give the two-senses-of-"generalise" refinement in the
+Discussion.
 
 **Blocker for settling this:** whether `G ≈ 0` is real (content-invariant) or the
 predictor genuinely isn't generalising must be decided by the **content-sensitivity

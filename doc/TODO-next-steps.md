@@ -41,10 +41,12 @@ only if time allows. See `doc/thesis-framing-notes.md` for *why* each matters an
   two-checkpoint early/late run is needed. (`probe_patch_response.py` loads
   checkpoints; `analyze_runs.py` overlays event files — different tools.)
 
-- [ ] **4. Decide the P1 wording (LaTeX).** The data falsifies P1 *as worded*
-  (share is elevated **and rising**, meeting P1's "flat, non-decaying" falsifier),
-  but not H1. Either reword P1 around the *gap* (content-sensitivity), or report
-  it as falsification-with-refinement. See `thesis-framing-notes.md` §2.
+- [x] **4. P1 wording — DECIDED (2026-07-27): keep P1 as worded, report
+  falsification-with-refinement.** Per the framing principle in
+  `thesis-framing-notes.md` (top): the RQ and P1–P4 stay as originally written —
+  no retrofitting predictions to the data. P1 is reported falsified-as-stated;
+  the two-senses-of-"generalise" refinement goes in the Discussion. (Remaining
+  LaTeX work is just *writing* that up, not deciding it.)
 
 - [ ] **5. (Optional robustness) Second-seed 20M matrix.** Background job; matches
   and broadens the seed-42 result. Does **not** gate the writeup (P4/§3.12 keep
