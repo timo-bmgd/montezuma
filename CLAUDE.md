@@ -12,6 +12,18 @@ algorithms.
 Distillation (RND) on `ALE/MontezumaRevenge-v5`, and what governs whether it
 does?
 
+**Framing principle (2026-07-27) — no retrofitting.** The research question and
+P1–P4 below stay **as originally worded**; never adapt questions or predictions
+to what the data happened to support. A bachelor thesis is an introduction to
+scientific practice: a partly-answerable question with honestly stated resource
+limits is a fine outcome — what matters is demonstrating that the student knows
+what he is doing. Report falsifications as falsifications (P1 is reported
+falsified-as-stated, refinement in the Discussion — decided); mechanism
+interpretation (e.g. the Burda §2.2.1 factor reading) belongs in the Discussion,
+not in a rewritten question; unanswerable parts (exploration cost, P3 dose
+curve, seed-level inference) are disclosed limitations with stated causes. See
+`doc/thesis-framing-notes.md` (top principle block).
+
 **Why the question is not already settled.** Burda et al. (2018) argue RND
 resists stochasticity traps because the target network is a deterministic
 function of the observation. Their §2.2.1 lists four sources of prediction
