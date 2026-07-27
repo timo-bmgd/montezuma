@@ -202,6 +202,48 @@ learning, *not* an inferential claim.
 
 ---
 
+## ⚠️ Compute limitation — the per-run 32-env ceiling (why the paper's 128-env scale regime is out of reach)
+
+The room-1 confinement is a **scale** limit (§3): the paper's regime is ~128
+parallel envs run for ~2 B frames; our runs use 32 envs. This subsection records
+*why 128 envs is not reachable per run on the available hardware* — so the scale
+limit is a genuine compute-envelope constraint, not a budget preference.
+
+**The cluster (HTW KI-Werkstatt `kiwihead01`, verified 2026-07-27).** One partition
+(`Debug_node`), two nodes (`kiwinode01`, `kiwinode02`), each **128 physical CPU
+cores (`CoresPerSocket=32`) + 4 GPUs + ~1 TB RAM** → **32 cores per GPU** (128 ÷ 4).
+`AsyncVectorEnv` spawns one process per env and wants ~one core each, so the natural
+per-GPU allotment is **32 envs** — exactly the value every run uses.
+
+**Getting 128 *dedicated* cores for one run is possible but rejected.** There is no
+scheduler policy cap (`MaxCPUsPerNode=UNLIMITED`; the account/QOS carry no
+`GrpTRES`/`MaxTRES` limits), and `sbatch --test-only --gres=gpu:1 --cpus-per-task=128`
+confirmed the scheduler *would* place 128 processors on one node. But a 1-GPU job
+claiming all 128 cores **monopolises an entire node while using only 1 of its 4
+GPUs, stranding the other 3** (no cores remain to pair with them). Dedicating a
+whole node — and idling 3 of 4 GPUs — to a single run is not acceptable and is
+deliberately not done. The only single-GPU alternative, 128 envs oversubscribed onto
+32 cores (4×), is not a real scale increase: it time-shares the same cores, so
+throughput and exploratory coverage do not grow — it is just a slower
+32-env-equivalent.
+
+**Training cannot be parallelised across a node's 4 GPUs without a rewrite.** The
+agents are single-file, single-GPU (CleanRL-style: one process, one `device="cuda"`,
+one optimizer). Making *one* run use all 4 GPUs would need `DistributedDataParallel`
+(or torch multiprocessing) + sharding the envs across GPUs + synchronising the RND
+obs/reward normalisation statistics across replicas — substantial new code with real
+correctness traps, out of scope for a characterisation-only thesis. (Parallelism
+*across runs* is free and is how the matrix already runs — 4 independent 32-env jobs
+fill a node's 4 GPUs — but parallelism *within* a run is unavailable.)
+
+**Consequence.** The practical ceiling is **32 envs per run**. Reaching the paper's
+128-env regime would require either monopolising a node (wasting 3 GPUs) or a
+multi-GPU reimplementation — neither taken. This is the concrete reason the room-1
+scale limit (§3) is *reported as a limitation rather than engineered around*: the
+compute envelope, not merely a budget choice, blocks the 128-env regime.
+
+---
+
 ## Seed situation (realization, not a blocker)
 
 - You have a **de-facto second seed** for `off`/`remote`/`sham` (the Jupyter
