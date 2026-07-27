@@ -33,18 +33,29 @@ Derived quantities:
       and the frozen/T=inf path is not yet in the code (F3/F4). This probe gives
       the T=1 datapoint and the content-sensitivity read for free.
 
-Usage (run on the cluster where the checkpoints live, or anywhere with the venv):
-    ./.venv/bin/python scripts/probe_patch_response.py \
+Two usage modes (each output row carries iteration + global_step, so both feed
+straight into scripts/plot_probe_trajectory.py):
+
+  cross-arm snapshot -- one ckpt per category at a matched step:
+    python scripts/probe_patch_response.py \
         --checkpoints $SCRATCH/montezuma/checkpoints/*/ckpt_002441.pt \
         --num-frames 4096 --num-fresh 8 --out patch_response.csv
 
-Point --checkpoints at one ckpt per category (off/remote/sham-remote/static). The
-off/sham numbers are the floor: their region is game HUD, so 'fresh' stamps a
-synthetic patch there -- read them as the calibration baseline, not memorisation.
+  within-run trajectory -- ALL checkpoints of ONE run (demonstrates the gap
+  closing over training; this is what slurm/run_probe_sweep.slurm fires per arm):
+    python scripts/probe_patch_response.py \
+        --checkpoints "$CK"/*__rnd_tv_remote__42__*/ckpt_*.pt \
+        --out probe_rnd_tv_remote__42.csv
+
+Point --checkpoints at RND checkpoints only (off/remote/sham-remote/static) -- PPO
+checkpoints have no rnd_model_state_dict and cannot be probed. The off/sham numbers
+are the floor: their region is game HUD, so 'fresh' stamps a synthetic patch there
+-- read them as the calibration baseline, not memorisation.
 """
 import argparse
 import glob
 import os
+import re
 import sys
 import types
 
@@ -122,6 +133,14 @@ def main():
     for path in paths:
         ckpt, a, env, agent, rnd, obs_rms = load_ckpt(path, device)
         mode = a.get("tv_mode", "off")
+        # Step axis for trajectory plots: prefer the values saved in the ckpt,
+        # fall back to the iteration encoded in the filename (ckpt_XXXXXX[_autostop].pt)
+        # and derive global_step from the batch size if the key is absent.
+        fn_match = re.search(r"ckpt_(\d+)", os.path.basename(path))
+        iteration = int(ckpt.get("iteration") or (int(fn_match.group(1)) if fn_match else 0))
+        global_step = int(ckpt.get("global_step") or 0)
+        if global_step == 0:
+            global_step = iteration * int(a.get("num_envs", 0)) * int(a.get("num_steps", 0))
         rs, cs = tv_region_slices(tuple(a.get("tv_position", (0, 0))),
                                   tuple(a.get("tv_size", (12, 84))))
         rng = np.random.default_rng([a.get("seed", 1), 0xC0FFEE])
@@ -146,6 +165,8 @@ def main():
 
         row = {
             "checkpoint": os.path.basename(os.path.dirname(path)),
+            "iteration": iteration,
+            "global_step": global_step,
             "tv_mode": mode,
             "err_displayed": err_disp,
             "err_blank": err_blank,
@@ -156,7 +177,8 @@ def main():
             "G_proxy": float(fresh_errs.mean()) - err_disp,
         }
         rows.append(row)
-        print(f"[{mode:12s}] err_disp={err_disp:.4f} err_blank={err_blank:.4f} "
+        print(f"[{mode:12s} step={global_step:>9d}] "
+              f"err_disp={err_disp:.4f} err_blank={err_blank:.4f} "
               f"err_fresh={fresh_errs.mean():.4f}+/-{fresh_errs.std():.4f}  "
               f"patch_contrib={row['patch_contribution']:+.4f} "
               f"content_sens={row['content_sensitivity']:.3f} G_proxy={row['G_proxy']:+.4f}")

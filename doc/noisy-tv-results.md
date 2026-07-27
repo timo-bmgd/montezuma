@@ -85,7 +85,25 @@ seed-42 `static` event file for consistency); all measured in room 1, so P4
 
 `scripts/probe_patch_response.py` (built + validated 2026-07-26) computes, from a
 checkpoint and with **no new training**, how the trained predictor responds to the
-patch. Run it on the cluster where the seed-42 checkpoints live:
+patch.
+
+**Preferred path — the automated sweep (cluster-native, repeatable across seeds).**
+Instead of hand-assembling the command below per checkpoint, fire the whole matrix
+as CPU jobs and aggregate:
+
+```bash
+bash slurm/submit_probe_sweep.sh        # 12 CPU jobs: 3 seeds × 4 RND arms;
+                                        # each traces one run's full ckpt trajectory
+python scripts/plot_probe_trajectory.py --indir analysis/probe   # figures + summary_probe.md
+```
+
+This traces `content_sensitivity` / `patch_contribution` across **every** checkpoint
+(the dense trajectory that *demonstrates* the gap closing), writes one
+`analysis/probe/probe_rnd_tv_<arm>__<seed>.csv` per run, and a cross-arm
+`summary_probe.md`. `slurm/run_probe_sweep.slurm` is the per-run job.
+
+**Manual primitive (one/few checkpoints).** The sweep just wraps this — useful for a
+quick single-checkpoint look. Run it on the cluster where the seed-42 checkpoints live:
 
 ```bash
 # on the cluster login node, from the repo root

@@ -17,21 +17,29 @@ only if time allows. See `doc/thesis-framing-notes.md` for *why* each matters an
   the biggest single-seed gap — `static` currently has only seed 1 (Jupyter, old
   GAE bug).
 
-- [ ] **2. Run the checkpoint probe (H1 mechanism).** On the cluster, run
-  `scripts/probe_patch_response.py` on the ~10M checkpoint of each category
-  (command in `noisy-tv-results.md` §2). Send back the CSV / printed rows. Gives
-  `patch_contribution`, `content_sensitivity`, `G_proxy` per arm.
+- [ ] **2. Run the patch-response probe sweep (H1 mechanism + self-limiting demo).**
+  Now a one-command, cluster-native pipeline — no local download, non-blocking
+  CPU jobs (they neither need a GPU nor compete with training for one):
+  ```bash
+  bash slurm/submit_probe_sweep.sh          # 12 CPU jobs: 3 seeds × 4 RND arms
+  #   each traces ONE run's FULL checkpoint trajectory -> analysis/probe/probe_*.csv
+  #   (SEEDS="42", ARMS="remote static", NUM_FRAMES=2048, DRY_RUN=1 all overridable)
+  python scripts/plot_probe_trajectory.py --indir analysis/probe   # figures + summary
+  ```
+  The **dense trajectory** (all ~49 checkpoints/run) subsumes the old two-point
+  early/late idea: watch `content_sensitivity` **elevated early, decaying late**
+  for `remote`/`static` (= memorisation gap closing = self-limiting *demonstrated*,
+  not inferred), read against the `off`/`sham` floor. `summary_probe.md` reports the
+  peak→final `content_sens_drop` per arm; `patch_contribution` is the predictor-level
+  P1 read. PPO arms are excluded (no predictor). Underlying primitive:
+  `scripts/probe_patch_response.py` (now emits `iteration`/`global_step` columns);
+  see `noisy-tv-results.md` §2. **Repeatable:** re-run after seed 44 lands — it just
+  re-globs whatever checkpoints exist.
 
-- [ ] **3. Early/late probe (demonstrates self-limiting capture).** Run
-  `probe_patch_response.py` on **two** checkpoints of the *same* `remote` run:
-  - early ≈ during the `tv_action_frac` spike (~4–5M → iteration ~1000–1200 →
-    `ckpt_001000.pt`),
-  - late ≈ ~10M (iteration ~2441 → `ckpt_002441.pt`).
-
-  Compare `content_sensitivity`/`G_proxy`: **higher early, lower late** = the
-  memorisation gap closed over training = self-limiting capture *demonstrated*
-  (not just inferred). NOTE: this is `probe_patch_response.py` (loads a
-  checkpoint), **not** `analyze_runs.py` (which overlays event files).
+- [x] **3. Early/late probe** — *folded into #2.* The full-trajectory sweep
+  demonstrates the gap closing across all checkpoints directly, so no separate
+  two-checkpoint early/late run is needed. (`probe_patch_response.py` loads
+  checkpoints; `analyze_runs.py` overlays event files — different tools.)
 
 - [ ] **4. Decide the P1 wording (LaTeX).** The data falsifies P1 *as worded*
   (share is elevated **and rising**, meeting P1's "flat, non-decaying" falsifier),
