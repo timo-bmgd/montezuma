@@ -188,8 +188,17 @@ Episodes reaching each milestone (single seed per arm — **descriptive only**):
 `off`); `off` itself is 0 in seed 1 and 420 in seed 2 (huge seed variance); the
 "TV arms never learn the key" signal is confounded — `sham` (no patch, +1 action)
 also fails, so it cannot be cleanly attributed to the TV vs the action-space
-change. So this is a **descriptive** finding (P4), consistent with the TV and/or
-the added action impairing first-key learning, *not* an inferential claim.
+change. **Budget mismatch:** the table mixes 10M Jupyter runs (seed 1/2) with 20M
+HPC runs (seed 42), and a 20M run has ~2× the episodes in which to stumble on a
+key, so raw *counts* are not comparable across the two sets. The striking case is
+`rnd off` s2 (Jupyter, **10M**) with **420** grabs vs `rnd off` s42 (HPC, **20M**)
+with only **9** — the shorter run scored far more, so this is seed variance, not a
+budget effect. The only apples-to-apples slice is the seed-42 HPC set (all 20M, one
+config): `off` 9, `remote` 0, `sham` 1 — still n=1 and still swamped by the 0-vs-420
+seed swing. A fairer cross-budget comparison would normalise to a *rate* (grabs per
+episode or per M steps) rather than a raw count. So this is a **descriptive**
+finding (P4), consistent with the TV and/or the added action impairing first-key
+learning, *not* an inferential claim.
 
 ---
 
