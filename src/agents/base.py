@@ -362,8 +362,11 @@ def make_env(
 
     def thunk():
         render_mode = "rgb_array" if (idx == 0 and (capture_video or overlay_video)) else None
-        # frameskip=1 disables ALE's built-in repeat; AtariPreprocessing does the skipping instead
-        env = gym.make(env_id, frameskip=1, render_mode=render_mode)
+        # frameskip=1 disables ALE's built-in repeat; AtariPreprocessing does the skipping instead.
+        # max_num_frames_per_episode caps emulator time at 5 minutes: 18_000 raw 60 Hz frames
+        # = 4_500 agent steps after frame_skip=4 (ALE's v5 default is 108_000 = 30 min).
+        env = gym.make(env_id, frameskip=1, max_num_frames_per_episode=18_000,
+                       render_mode=render_mode)
         env = RoomTracker(env)
         env = AtariPreprocessing(
             env,
