@@ -362,12 +362,18 @@ def make_env(
 
     def thunk():
         render_mode = "rgb_array" if (idx == 0 and (capture_video or overlay_video)) else None
-        # frameskip=1 disables ALE's built-in repeat; AtariPreprocessing does the skipping instead
-        env = gym.make(env_id, frameskip=1, render_mode=render_mode)
+        # frameskip=1 disables ALE's built-in repeat; AtariPreprocessing does the skipping instead.
+        # max_num_frames_per_episode caps emulator time at 5 minutes: 18_000 raw 60 Hz frames
+        # = 4_500 agent steps after frame_skip=4 (ALE's v5 default is 108_000 = 30 min).
+        env = gym.make(env_id, frameskip=1, max_num_frames_per_episode=18_000,
+                       render_mode=render_mode)
         env = RoomTracker(env)
         env = AtariPreprocessing(
             env,
-            noop_max=30,
+            # No no-op starts: the RND paper follows Machado et al. 2018, where sticky
+            # actions (v5's repeat_action_probability=0.25) REPLACE random no-op resets
+            # as the stochasticity source — Burda's make_atari has no NoopResetEnv.
+            noop_max=0,
             frame_skip=4,
             screen_size=84,
             grayscale_obs=True,
