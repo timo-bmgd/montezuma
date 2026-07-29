@@ -370,7 +370,10 @@ def make_env(
         env = RoomTracker(env)
         env = AtariPreprocessing(
             env,
-            noop_max=30,
+            # No no-op starts: the RND paper follows Machado et al. 2018, where sticky
+            # actions (v5's repeat_action_probability=0.25) REPLACE random no-op resets
+            # as the stochasticity source — Burda's make_atari has no NoopResetEnv.
+            noop_max=0,
             frame_skip=4,
             screen_size=84,
             grayscale_obs=True,
