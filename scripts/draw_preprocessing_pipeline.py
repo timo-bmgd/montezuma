@@ -17,9 +17,9 @@ TITLE_C = "#16181d"
 TEXT_C = "#2a2e36"
 MUTED = "#555b66"
 
-fig, ax = plt.subplots(figsize=(8.6, 12.4))
+fig, ax = plt.subplots(figsize=(8.6, 14.8))
 ax.set_xlim(0, 100)
-ax.set_ylim(0, 172)
+ax.set_ylim(-33, 172)
 ax.axis("off")
 
 CX, W = 34, 62          # main flow column
@@ -119,7 +119,7 @@ for x_ in (LX, RX):
 mid_y = (fork_y + net_top) / 2
 ax.text(LX + 2.0, mid_y, "(4,84,84) / 255.0", ha="left", va="center",
         fontsize=8.1, family="monospace", color=SHAPE_C)
-ax.text(RX + 2.0, mid_y, "(1,84,84), (x−μ)/σ, clip ±5", ha="left", va="center",
+ax.text(RX + 2.0, mid_y, "(1,84,84) whitened ±5", ha="left", va="center",
         fontsize=8.1, family="monospace", color=SHAPE_C)
 
 NLINE = 2.9
@@ -138,11 +138,40 @@ draw_box(net_top, "RND target + predictor", [
     "=  intrinsic reward (novelty bonus)",
 ], cx=RX, w=BW, fill=FILL_NET, title_fs=9.6, fs=8.1, line=NLINE)
 
-fy = nb - 5.0
+# ── action selection: where the decision actually happens ───────────
+ACX, AW = 50, 60
+act_top = nb - 8.5
+ax.add_patch(FancyArrowPatch((LX, nb - 0.6), (ACX - 8, act_top + 0.6),
+                             arrowstyle="-|>", mutation_scale=13,
+                             linewidth=1.3, color=ARROW))
+ax.text((LX + ACX - 8) / 2 - 2.5, (nb + act_top) / 2 + 1.6, "512 features",
+        ha="right", va="center", fontsize=8.1, family="monospace", color=SHAPE_C)
+abot = draw_box(act_top, "Action selection  (actor head — the decision)", [
+    "logits:  ppo.py Linear(512 → 18)   ·   rnd.py Linear(448 → 448 → n)",
+    "π(a|s) = Categorical(logits)  — softmax over the action set",
+    "$a_t \\sim \\pi(\\cdot|s)$ :  sampled from the distribution, not argmax",
+    "envs.step($a_t$)  →  the loop closes",
+], cx=ACX, w=AW, fill=FILL_NET, title_fs=9.8, fs=8.2)
+
+# feedback loop: the chosen action drives the emulator's next step
+loop_x = 98.7  # right of the RND box edge (x=97) so the line never crosses it
+ale_mid = 162 - 9.0
+amid = (act_top + abot) / 2
+ax.plot([ACX + AW / 2 + 0.6, loop_x], [amid, amid], color=ARROW, lw=1.3)
+ax.plot([loop_x, loop_x], [amid, ale_mid], color=ARROW, lw=1.3)
+ax.add_patch(FancyArrowPatch((loop_x, ale_mid), (CX + W / 2 + 0.7, ale_mid),
+                             arrowstyle="-|>", mutation_scale=13,
+                             linewidth=1.3, color=ARROW))
+ax.text(loop_x - 2.6, (amid + ale_mid) / 2, "$a_t$ → next env step",
+        rotation=90, ha="center", va="center", fontsize=8.4,
+        family="monospace", color=SHAPE_C)
+
+fy = abot - 5.0
 for i, ln in enumerate([
-    "Conditions match Burda et al. 2018 (RND): sticky actions instead of random no-op starts,",
-    "episode cap 4,500 agent steps (18,000 raw frames), full-episode training (no life-loss termination),",
-    "reward clipped after true-score logging. RND networks see only the newest, whitened frame.",
+    "One Adam optimizer updates everything end-to-end — actor, critic(s) and the CNN trunk (plus the RND",
+    "predictor); only the RND target stays frozen. The action is sampled, never argmax: policy entropy is the",
+    "exploration dial (ent_coef). Conditions match Burda et al. 2018: sticky actions replace no-op starts,",
+    "episode cap 4,500 agent steps (18,000 raw frames), reward clipped after true-score logging.",
 ]):
     ax.text(50, fy - i * 2.8, ln, ha="center", fontsize=8.3, color=MUTED)
 
