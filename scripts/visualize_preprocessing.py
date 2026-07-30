@@ -26,6 +26,7 @@ Outputs (PNG):
                                        at 0 (vmin/vmax = -5/+5, the clip bounds)
   plain/06_rnd_whitened_gray.png       same data, neutral grayscale (0 = mid-gray)
   _overview.png                        annotated top-to-bottom flowchart of the journey
+  _pipeline_horizontal.png / .pdf      compact left-to-right pipeline strip (paper figure)
 """
 import os
 import sys
@@ -40,7 +41,8 @@ import cv2  # noqa: E402
 import matplotlib  # noqa: E402
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib.patches import ConnectionPatch, FancyBboxPatch  # noqa: E402
+from matplotlib.patches import (ConnectionPatch, FancyArrowPatch,  # noqa: E402
+                                FancyBboxPatch, Rectangle)
 from gymnasium.wrappers.utils import RunningMeanStd  # noqa: E402
 
 ENV_ID = "ALE/MontezumaRevenge-v5"
@@ -295,4 +297,84 @@ fig.suptitle("Montezuma's Revenge — the observation pipeline, stage by stage "
              "verified byte-identical to the real make_env stack", fontsize=13, y=0.985)
 fig.savefig(os.path.join(OUT, "_overview.png"), dpi=150, facecolor="white")
 print(f"  wrote {os.path.relpath(os.path.join(OUT, '_overview.png'))}")
+
+# ── compact left-to-right pipeline strip (paper figure) ──────────────────────
+print("horizontal pipeline figure")
+fig2 = plt.figure(figsize=(16, 3.7))
+gs2 = fig2.add_gridspec(1, 6, width_ratios=[0.80, 0.90, 0.80, 1.0, 1.0, 1.24],
+                        left=0.012, right=0.988, top=0.90, bottom=0.17, wspace=0.42)
+PORTRAIT = 160 / 210   # width/height of a raw 210x160 frame drawn at unit height
+
+
+h_captions = []
+
+
+def hpanel(c, caption):
+    ax = fig2.add_subplot(gs2[0, c])
+    ax.axis("off")
+    ax.set_aspect("equal")
+    h_captions.append((ax, caption))
+    return ax
+
+
+def place(ax, img, x0, y0, w, h, dashed=False):
+    kw = {"cmap": "gray", "vmin": 0, "vmax": 255} if img.ndim == 2 else {}
+    ax.imshow(img, extent=(x0, x0 + w, y0, y0 + h), interpolation="nearest", **kw)
+    ax.add_patch(Rectangle((x0, y0), w, h, fill=False, edgecolor="#8a93a3",
+                           linewidth=0.9, linestyle="--" if dashed else "-"))
+
+
+axs2 = []
+a = hpanel(0, "raw frame\n(210, 160, 3)  RGB")
+place(a, s1["raw_rgb"][3], 0, 0, PORTRAIT, 1)
+a.set_xlim(-0.01, PORTRAIT + 0.01); a.set_ylim(-0.01, 1.01); axs2.append(a)
+
+a = hpanel(1, "grayscale frames 3 & 4\n2 × (210, 160)")
+d = 0.05
+place(a, s1["gray3"], d, d, PORTRAIT, 1)          # frame 3 behind
+place(a, s1["gray4"], 0, 0, PORTRAIT, 1)          # frame 4 in front
+a.set_xlim(-0.01, PORTRAIT + d + 0.01); a.set_ylim(-0.01, 1 + d + 0.01); axs2.append(a)
+
+a = hpanel(2, "max-pooled\n(210, 160)")
+place(a, s1["maxpool"], 0, 0, PORTRAIT, 1)
+a.set_xlim(-0.01, PORTRAIT + 0.01); a.set_ylim(-0.01, 1.01); axs2.append(a)
+
+a = hpanel(3, "resized\n(84, 84)  uint8")
+place(a, s1["resized"], 0, 0, 1, 1)
+a.set_xlim(-0.01, 1.01); a.set_ylim(-0.01, 1.01); axs2.append(a)
+
+a = hpanel(4, "noisy-TV stamped\n(84, 84) — TV runs only")
+place(a, stamped, 0, 0, 1, 1, dashed=True)
+a.set_xlim(-0.01, 1.01); a.set_ylim(-0.01, 1.01); axs2.append(a)
+
+a = hpanel(5, "frame stack, last 4 agent steps\n(4, 84, 84)  uint8")
+d = 0.055
+for j, sl in enumerate((0, 1, 2, 3)):             # oldest deepest in the deck
+    off = d * (3 - j)
+    place(a, obs_off[sl], off, off, 1, 1)
+a.set_xlim(-0.01, 1 + 3 * d + 0.01); a.set_ylim(-0.01, 1 + 3 * d + 0.01); axs2.append(a)
+
+for _ax, _cap in h_captions:
+    _p = _ax.get_position()
+    fig2.text((_p.x0 + _p.x1) / 2, 0.115, _cap, ha="center", va="top",
+              fontsize=9.3, color="#22262e")
+
+OPS = ["grayscale\n(read frames 3 & 4)", "np.maximum\n(2 → 1)",
+       "resize\n(INTER_AREA)", "+ noise patch\n(TV runs only)",
+       "push into deque\n(1 frame / step)"]
+for i, op in enumerate(OPS):
+    pa, pb = axs2[i].get_position(), axs2[i + 1].get_position()
+    ym = (pa.y0 + pa.y1) / 2
+    fig2.add_artist(FancyArrowPatch(
+        (pa.x1 + 0.002, ym), (pb.x0 - 0.002, ym), transform=fig2.transFigure,
+        arrowstyle="-|>", mutation_scale=14, lw=1.4, color=EDGE,
+        linestyle=(0, (4, 3)) if i == 3 else "-"))
+    fig2.text((pa.x1 + pb.x0) / 2, 0.915, op, ha="center", va="bottom",
+              fontsize=8.8, color=LBL, family="monospace")
+
+for ext in ("png", "pdf"):
+    fig2.savefig(os.path.join(OUT, f"_pipeline_horizontal.{ext}"),
+                 dpi=200 if ext == "png" else None, facecolor="white")
+print(f"  wrote {os.path.relpath(os.path.join(OUT, '_pipeline_horizontal.png'))} (+ .pdf)")
+
 print("done — all stage images verified and written")
