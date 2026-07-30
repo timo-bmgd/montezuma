@@ -22,8 +22,10 @@ Outputs (PNG):
   plain/03_resized_84x84.png           cv2.INTER_AREA down-scale, x5 nearest upscale
   plain/04_tv_stamped_84x84.png        NoisyTVWrapper patch (remote mode), x5 upscale
   plain/05_stack_slot{0..3}.png        the 4-frame stack after 8 agent steps
-  plain/06_rnd_whitened.png            per-pixel whitened RND input (diverging colormap)
-  _overview.png                        annotated montage of the full journey
+  plain/06_rnd_whitened.png            whitened RND input, diverging colormap centered
+                                       at 0 (vmin/vmax = -5/+5, the clip bounds)
+  plain/06_rnd_whitened_gray.png       same data, neutral grayscale (0 = mid-gray)
+  _overview.png                        annotated top-to-bottom flowchart of the journey
 """
 import os
 import sys
@@ -38,6 +40,7 @@ import cv2  # noqa: E402
 import matplotlib  # noqa: E402
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.patches import ConnectionPatch, FancyBboxPatch  # noqa: E402
 from gymnasium.wrappers.utils import RunningMeanStd  # noqa: E402
 
 ENV_ID = "ALE/MontezumaRevenge-v5"
@@ -49,7 +52,7 @@ PLAIN = os.path.join(OUT, "plain")
 os.makedirs(PLAIN, exist_ok=True)
 
 
-def save_plain(name, img, upscale=1, cmap=None):
+def save_plain(name, img, upscale=1, cmap=None, vmin=None, vmax=None):
     """Save a raw image without axes; nearest-neighbour upscale for small frames."""
     if upscale > 1:
         img = cv2.resize(img, (img.shape[1] * upscale, img.shape[0] * upscale),
@@ -58,7 +61,7 @@ def save_plain(name, img, upscale=1, cmap=None):
     if cmap is None:
         cv2.imwrite(path, img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
     else:  # float data through a matplotlib colormap
-        plt.imsave(path, img, cmap=cmap)
+        plt.imsave(path, img, cmap=cmap, vmin=vmin, vmax=vmax)
     print(f"  wrote {os.path.relpath(path)}  shape={img.shape}")
 
 
@@ -153,40 +156,143 @@ obs_rms.update(np.concatenate(buf, axis=0))
 whitened = ((s1["resized"].astype(np.float32) - obs_rms.mean[0, 0])
             / np.sqrt(obs_rms.var[0, 0])).clip(-5, 5)
 print(f"  whitened range: [{whitened.min():.2f}, {whitened.max():.2f}]")
-save_plain("06_rnd_whitened.png", whitened, cmap="RdBu_r")
+# symmetric limits so 0 (= "pixel matches its running average") is the neutral colour
+save_plain("06_rnd_whitened.png", whitened, upscale=5, cmap="RdBu_r", vmin=-5, vmax=5)
+save_plain("06_rnd_whitened_gray.png", whitened, upscale=5, cmap="gray", vmin=-5, vmax=5)
 
-# ── annotated overview figure ────────────────────────────────────────────────
+# ── annotated overview: strict top-to-bottom flowchart ───────────────────────
 print("overview figure")
-fig = plt.figure(figsize=(15, 9.5))
-gs = fig.add_gridspec(3, 5, hspace=0.34, wspace=0.12)
+GRAY = {"cmap": "gray", "vmin": 0, "vmax": 255}
+EDGE = "#3a3f4a"
+LBL = "#8a4a10"
+MUTED = "#5b6270"
+
+fig = plt.figure(figsize=(13, 18))
+gs = fig.add_gridspec(6, 12, height_ratios=[1.25, 1.25, 1.25, 1.0, 1.0, 1.15],
+                      left=0.03, right=0.97, top=0.925, bottom=0.03,
+                      hspace=0.55, wspace=0.18)
 
 
-def panel(r, c, img, title, cmap="gray", span=1):
-    ax = fig.add_subplot(gs[r, c] if span == 1 else gs[r, c:c + span])
-    ax.imshow(img, cmap=cmap, interpolation="nearest",
-              **({} if img.ndim == 3 or cmap != "gray" else {"vmin": 0, "vmax": 255}))
-    ax.set_title(title, fontsize=9)
+def panel(r, c0, c1, img, caption, **imshow_kw):
+    ax = fig.add_subplot(gs[r, c0:c1])
+    ax.imshow(img, interpolation="nearest", **imshow_kw)
     ax.axis("off")
+    ax.text(0.5, -0.045, caption, transform=ax.transAxes, ha="center", va="top",
+            fontsize=9.2, color="#22262e")
+    return ax
 
 
+def group_box(axs, label, dashed=False):
+    bxs = [a.get_position() for a in axs]
+    x0 = min(b.x0 for b in bxs) - 0.011
+    x1 = max(b.x1 for b in bxs) + 0.011
+    y0 = min(b.y0 for b in bxs) - 0.033
+    y1 = max(b.y1 for b in bxs) + 0.007
+    fig.add_artist(FancyBboxPatch(
+        (x0, y0), x1 - x0, y1 - y0, transform=fig.transFigure,
+        boxstyle="round,pad=0.004,rounding_size=0.008", fill=False,
+        edgecolor="#8a93a3", linewidth=1.3,
+        linestyle="--" if dashed else "-", zorder=1.5))
+    fig.text(x0 + 0.002, y1 + 0.010, label, fontsize=11.5, fontweight="bold",
+             va="bottom", ha="left", color="#16181d", bbox=dict(facecolor="white", edgecolor="none", pad=1.2), zorder=6)
+
+
+def arrow(axA, axB, xyA=(0.5, -0.17), xyB=(0.5, 1.06), label=None, dx=0.010):
+    fig.add_artist(ConnectionPatch(
+        xyA=xyA, coordsA=axA.transAxes, xyB=xyB, coordsB=axB.transAxes,
+        arrowstyle="-|>", mutation_scale=16, lw=1.7, color=EDGE, zorder=5))
+    if label:
+        pa, pb = axA.get_position(), axB.get_position()
+        xm = pa.x0 + (pa.x1 - pa.x0) * xyA[0]
+        ym = pb.y1 + 0.62 * (pa.y0 - pb.y1)   # nearer the source: clears headers
+        fig.text(xm + dx, ym, label, fontsize=8.8,
+                 family="monospace", color=LBL, va="center", ha="left", bbox=dict(facecolor="white", edgecolor="none", pad=1.2), zorder=6)
+
+
+# STAGE 1: the 4 raw frames of one agent step
+raw_axs = []
 for i in range(4):
-    panel(0, i, s1["raw_rgb"][i],
-          f"raw frame {i + 1}/4  (210×160 RGB)\n" +
-          ("discarded" if i < 2 else f"read as grayscale → buffer"))
-panel(0, 4, diff, f"|frame3 − frame4|  (agent step {flicker_k + 1})\ninter-frame sprite difference — max-pool keeps both")
-panel(1, 0, s1["gray3"], "grayscale frame 3  (210×160)")
-panel(1, 1, s1["gray4"], "grayscale frame 4  (210×160)")
-panel(1, 2, s1["maxpool"], "np.maximum(frame3, frame4)")
-panel(1, 3, s1["resized"], "cv2.INTER_AREA → 84×84 uint8\n= what a tv-off agent sees")
-panel(1, 4, stamped, "NoisyTVWrapper (remote):\n12×84 noise patch over the HUD")
-for i in range(4):
-    panel(2, i, obs_off[i], f"stack slot {i}  ({'oldest' if i == 0 else 'newest' if i == 3 else '…'})\nafter 8 steps of RIGHT")
-panel(2, 4, whitened, "RND input: whitened newest frame\n(x−μ)/σ per pixel, clip ±5", cmap="RdBu_r")
+    cap = f"frame {i + 1}/4 — " + ("discarded ✗" if i < 2 else "READ ✓")
+    raw_axs.append(panel(0, 3 * i, 3 * i + 3, s1["raw_rgb"][i], cap))
+group_box(raw_axs, "①  ONE AGENT STEP — the same action is fed to 4 consecutive "
+                   "raw emulator frames (each 210×160 RGB)")
 
-fig.suptitle("Montezuma's Revenge — observation pipeline, first agent step(s), seed 1  "
-             "(every 84×84 frame verified byte-identical to the make_env stack)",
-             fontsize=11.5)
-fig.savefig(os.path.join(OUT, "_overview.png"), dpi=150, bbox_inches="tight",
-            facecolor="white")
+# STAGE 2: grayscale reads of frames 3+4, aligned under their raw frames
+g3 = panel(1, 6, 9, s1["gray3"], "grayscale frame 3  (210×160)", **GRAY)
+g4 = panel(1, 9, 12, s1["gray4"], "grayscale frame 4  (210×160)", **GRAY)
+group_box([g3, g4], "②  GRAYSCALE — frames 3 + 4, two separate 2-D images")
+arrow(raw_axs[2], g3, label="getScreenGrayscale")
+arrow(raw_axs[3], g4)
+fig.text(0.17, (raw_axs[0].get_position().y0 + g3.get_position().y1) / 2,
+         "frames 1 & 2 are never observed —\nthey exist only inside the emulator",
+         fontsize=9.6, color=MUTED, ha="center", va="center", style="italic")
+
+# STAGE 3: max-pool merges the two frames into ONE 2-D image
+dif = panel(2, 2, 5, diff, f"|frame3 − frame4|  (largest at step {flicker_k + 1}):\n"
+                           "what differs between the two — here the moving sprite", **GRAY)
+mp = panel(2, 6, 9, s1["maxpool"], "np.maximum(frame3, frame4)  →  ONE image,\n"
+                                   "still 2-D (210×160) — nothing visible is lost", **GRAY)
+group_box([dif, mp], "③  MAX-POOL — 2 images → 1 image (pixel-wise maximum)")
+arrow(g3, mp, xyA=(0.5, -0.17), xyB=(0.30, 1.06))
+arrow(g4, mp, xyA=(0.5, -0.17), xyB=(0.75, 1.06))
+
+# STAGE 4 + 5: resize; TV stamp as a side branch
+rz = panel(3, 6, 9, s1["resized"], "84×84 uint8 — what a tv-off agent sees", **GRAY)
+group_box([rz], "④  RESIZE → 84×84")
+tv = panel(3, 9, 12, stamped, "in TV runs, THIS frame is stacked instead", **GRAY)
+group_box([tv], "⑤  NOISY-TV (TV runs only)", dashed=True)
+arrow(mp, rz)
+fig.add_artist(ConnectionPatch(
+    xyA=(1.03, 0.5), coordsA=rz.transAxes, xyB=(-0.03, 0.5), coordsB=tv.transAxes,
+    arrowstyle="-|>", mutation_scale=16, lw=1.7, color=EDGE,
+    linestyle=(0, (4, 3)), zorder=5))
+
+# STAGE 6: the frame stack — one processed frame per agent step
+slot_axs = []
+for i in range(4):
+    cap = f"slot {i}  =  step {i + 5}" + ("  (oldest)" if i == 0 else "  (newest)" if i == 3 else "")
+    slot_axs.append(panel(4, 3 * i, 3 * i + 3, obs_off[i], cap, **GRAY))
+group_box(slot_axs, "⑥  FRAME STACK — one frame from each of the LAST 4 AGENT STEPS → (4, 84, 84)\n"
+                    "(these four ≠ the 4 emulator frames of ① — they span four separate steps)")
+arrow(rz, slot_axs[2], xyA=(0.5, -0.30), xyB=(0.5, 1.10))
+_p = rz.get_position()
+fig.text(_p.x0 + _p.width / 2 + 0.012, _p.y0 - 0.031,
+         "one frame per agent step → deque",
+         fontsize=8.6, family="monospace", color=LBL, va="center", ha="left", bbox=dict(facecolor="white", edgecolor="none", pad=1.2), zorder=6)
+
+# STAGE 7: network inputs
+txt = fig.add_subplot(gs[5, 0:7])
+txt.axis("off")
+txt.text(0, 0.97, "⑦  NETWORK INPUTS", fontsize=11.5, fontweight="bold", va="top")
+txt.text(0, 0.84, (
+    "Policy path:  the whole (4,84,84) stack, ÷255 → NatureCNN → 512 features.\n\n"
+    "RND path:  ONLY the newest frame (slot 3), per-pixel whitened —\n"
+    "(x − μ)/σ, clip ±5;  μ, σ = running statistics of each pixel over play.\n\n"
+    "The RND image is NOT colour — it is one float channel; the colormap\n"
+    "encodes the signed value:  red = brighter than this pixel's usual value,\n"
+    "blue = darker, white ≈ 0 (pixel matches its average).\n\n"
+    "The background vanishes because it never changes (x ≈ μ ⇒ 0): whitening\n"
+    "erases static pixels, so RND sees only deviations — sprites, HUD changes.\n"
+    "The same mechanism tames any stationary noise to ~unit variance, which\n"
+    "is why the TV's stimulus strength is patch AREA, not amplitude."),
+    fontsize=9.5, va="top", color="#22262e", linespacing=1.35)
+wh = fig.add_subplot(gs[5, 8:11])
+im = wh.imshow(whitened, cmap="RdBu_r", vmin=-5, vmax=5, interpolation="nearest")
+wh.set_xticks([]); wh.set_yticks([])
+for sp in wh.spines.values():
+    sp.set_color("#b8bec8")
+wh.text(0.5, -0.045, "RND input: whitened newest frame", transform=wh.transAxes,
+        ha="center", va="top", fontsize=9.2, color="#22262e")
+cax = wh.inset_axes([1.06, 0.02, 0.06, 0.96])
+cb = fig.colorbar(im, cax=cax)
+cb.ax.tick_params(labelsize=8)
+cb.set_label("(x − μ) / σ", fontsize=8.5)
+arrow(slot_axs[3], wh, xyA=(0.5, -0.30), xyB=(0.5, 1.06),
+      label="newest frame only:\n(x−μ)/σ, clip ±5", dx=-0.155)
+
+fig.suptitle("Montezuma's Revenge — the observation pipeline, stage by stage "
+             "(read top → bottom)\nfirst agent step(s), seed 1 · every 84×84 frame "
+             "verified byte-identical to the real make_env stack", fontsize=13, y=0.985)
+fig.savefig(os.path.join(OUT, "_overview.png"), dpi=150, facecolor="white")
 print(f"  wrote {os.path.relpath(os.path.join(OUT, '_overview.png'))}")
 print("done — all stage images verified and written")
