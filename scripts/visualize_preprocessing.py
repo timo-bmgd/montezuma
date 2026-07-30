@@ -301,7 +301,7 @@ print(f"  wrote {os.path.relpath(os.path.join(OUT, '_overview.png'))}")
 # ── compact left-to-right pipeline strip (paper figure) ──────────────────────
 print("horizontal pipeline figure")
 fig2 = plt.figure(figsize=(16, 3.7))
-gs2 = fig2.add_gridspec(1, 6, width_ratios=[0.80, 0.90, 0.80, 1.0, 1.0, 1.24],
+gs2 = fig2.add_gridspec(1, 6, width_ratios=[0.93, 0.90, 0.80, 1.0, 1.0, 1.24],
                         left=0.012, right=0.988, top=0.90, bottom=0.17, wspace=0.42)
 PORTRAIT = 160 / 210   # width/height of a raw 210x160 frame drawn at unit height
 
@@ -325,9 +325,12 @@ def place(ax, img, x0, y0, w, h, dashed=False):
 
 
 axs2 = []
-a = hpanel(0, "raw frame\n(210, 160, 3)  RGB")
-place(a, s1["raw_rgb"][3], 0, 0, PORTRAIT, 1)
-a.set_xlim(-0.01, PORTRAIT + 0.01); a.set_ylim(-0.01, 1.01); axs2.append(a)
+a = hpanel(0, "4 raw frames of one agent step\n4 × (210, 160, 3)  RGB")
+d = 0.05
+for j in range(4):                                # frame 1 deepest, frame 4 in front
+    off = d * (3 - j)
+    place(a, s1["raw_rgb"][j], off, off, PORTRAIT, 1)
+a.set_xlim(-0.01, PORTRAIT + 3 * d + 0.01); a.set_ylim(-0.01, 1 + 3 * d + 0.01); axs2.append(a)
 
 a = hpanel(1, "grayscale frames 3 & 4\n2 × (210, 160)")
 d = 0.05
