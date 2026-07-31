@@ -7,6 +7,37 @@ file captures *why*.
 
 ---
 
+## 2026-07-31 — PPO control runs reused across the env-config change
+
+**Change:** No new PPO runs for the final noisy-TV matrix. The six completed
+v2 HPC runs (`ppo_tv_off` / `ppo_tv_remote`, seeds 42/43/44, 20M steps) are
+carried over as the no-intrinsic controls, although they ran under the
+pre-2026-07-31 environment configuration (30-min episode cap, `noop_max=30`)
+while the final RND batch uses the paper-faithful config (5-min cap =
+18,000 frames, no no-op starts). Only the four RND conditions are re-run
+(seeds 100/200/300, spaced >= num_envs so `seed+i` env seeds cannot collide).
+
+**Why (time-constrained, empirically defended):** (1) The episode-cap
+mismatch is measured to be inert for these runs — fewer than 0.2% of episodes
+in any of the six PPO runs exceeded the new 4,500-agent-step cap (per-run:
+14/41,015 · 50/34,413 · 21/43,534 · 19/38,951 · 73/40,101 · 21/35,057;
+mean episode lengths 458–580 steps). (2) No-op starts affect only the first
+<=30 raw frames (<=8 agent steps); sticky actions (p=0.25), the dominant
+stochasticity source (Machado et al. 2018), are present in both configs.
+(3) The `--update-proportion` fix does not apply to `ppo.py` (no predictor),
+so the PPO runs are unaffected by the substantive algorithmic change.
+(4) The PPO arms serve only as the no-intrinsic `tv_action_frac` floor and
+descriptive exploration context; the primary behavioural null for P2 is
+sham-remote, which IS re-run under the final config.
+
+**How to apply / re-evaluate:** State the config split explicitly in the
+methodology (one table row: v1/v2 + PPO = old env config; final RND batch =
+paper config). If reviewers or results demand it, the two PPO arms can be
+re-run later under the final config with the same sbatch pattern
+(`run_ppo_tv.slurm`, TV_MODE=off/remote) — nothing else depends on them.
+
+---
+
 ## 2026-07-31 — RND `--update-proportion` default: 0.25 → auto (`min(1, 32/num_envs)`)
 
 **Change:** `src/agents/rnd.py` `--update-proportion` default changed from a

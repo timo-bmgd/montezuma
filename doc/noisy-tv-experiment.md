@@ -143,6 +143,17 @@ GPU-h.
 
 ## Caveats to carry into the thesis write-up
 
+- **The PPO control runs are reused from the pre-2026-07-31 environment
+  configuration** (30-min episode cap, `noop_max=30`), while the final RND
+  batch runs the paper-faithful config (5-min cap, no no-op starts). Verified
+  benign: fewer than 0.2% of episodes in any of the six PPO runs exceeded the
+  new 4,500-step cap (means 458--580 steps; worst run: 73 of 40,101 episodes),
+  no-op starts affect only the first <=8 agent steps while sticky actions
+  (p=0.25, present in both configs) dominate stochasticity, and the
+  update-proportion fix does not apply to PPO (no predictor). The PPO arms
+  serve only as the no-intrinsic `tv_action_frac` floor and descriptive
+  exploration context; the primary behavioural null (sham-remote) is re-run
+  under the final config. See `doc/decisions.md` 2026-07-31.
 - **All pre-2026-07-31 runs trained the RND predictor ~4x slower than
   paper-equivalent.** The hard-coded `--update-proportion 0.25` is Burda et
   al.'s value *for 128 envs* (their rule pins the predictor's effective batch
