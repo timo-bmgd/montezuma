@@ -113,7 +113,10 @@ see `doc/decisions.md` and the caveat below).
 
 Launch via `slurm/run_rnd_tv.slurm` / `slurm/run_ppo_tv.slurm`
 (`sbatch --export=ALL,SEED=1,TV_MODE=remote slurm/run_rnd_tv.slurm`) or the
-matrix cell in `training-runs.ipynb`.
+matrix cell in `training-runs.ipynb`. Runs launched after 2026-07-31 are named
+`{algo}_tv_{mode}_{RUN_TAG}` with `RUN_TAG` defaulting to `paper` (the
+paper-faithful config), so they are distinguishable from the earlier batches
+at a glance; export `RUN_TAG=""` for the legacy naming.
 
 | # | Agent | TV_MODE | Seeds | Status | Purpose |
 |---|---|---|---|---|---|
