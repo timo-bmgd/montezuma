@@ -63,10 +63,20 @@ but never resampled — controls for HUD occlusion) · `static` (18 actions,
 patch resampled every `T` steps — signal degradation without a behavioural
 channel).
 
-**Current blocker.** All four completed 20M-step / 32-env runs
-(`off`, `remote`, `sham`, `static`, one seed each) have failed to leave room 1.
-The `off` baseline is therefore underperforming a random policy and every arm
-is uninterpretable. Diagnosing this is the sole active priority.
+**Current status (2026-07-31).** The v2 HPC batch is complete: 18 runs at
+20M steps / 32 envs, seeds 42/43/44 (`analysis/HPC-Runs/`). Signal capture
+replicates 3/3 seeds (`tv_intrinsic_share` ~0.14-0.25 in remote/static vs a
+~-0.05 to -0.17 off/sham floor). Behavioural capture is seed-dependent and
+anticorrelated with exploration: remote s44 ended at ~2x-chance remote-pressing
+and stayed in room 1, while s43 pruned the remote below chance and reached 5
+rooms (the best run of the batch). However, all pre-2026-07-31 runs trained
+the RND predictor at ~1/4 the paper-equivalent rate (the `--update-proportion`
+env-count bug, fixed since — `doc/decisions.md` 2026-07-31), which is
+systematically favorable to capture. **Active priority: the SCHWERT re-run** —
+the four RND conditions at seeds 100/200/300 under the paper-faithful config
+(5-min episode cap, no no-op starts, auto update-proportion); the six v2 PPO
+runs are reused as no-intrinsic controls (defense in `doc/decisions.md`). See
+the run-batch history table in `doc/noisy-tv-experiment.md`.
 
 ## Project Purpose
 
@@ -266,7 +276,7 @@ python scripts/analyze_runs.py --logdir analysis     # default --logdir is analy
 tensorboard --logdir analysis                        # same runs, interactive overlay
 ```
 
-Works on any run set (e.g. `--logdir runs`). Caveat it encodes: `charts/rooms_visited` is a *per-episode* distinct-room count (resets every episode), so it reads flat at 1 even when a run does occasionally reach room 2 — read the generated `figures/charts__rooms_furthest_cummax.png` (cumulative furthest room reached) for exploration over time. `analysis/` (6 completed 10M noisy-TV runs + `README.md`) is the worked example this was built for.
+Works on any run set (e.g. `--logdir runs`). Caveat it encodes: `charts/rooms_visited` is a *per-episode* distinct-room count (resets every episode), so it reads flat at 1 even when a run does occasionally reach room 2 — read the generated `figures/charts__rooms_furthest_cummax.png` (cumulative furthest room reached) for exploration over time. `analysis/` is the worked example this was built for: `Jupyter-Pod-Runs/` (v1: 6 completed 10M runs, documented in its `README.md`/`summary.md`) and `HPC-Runs/` (v2: 18 completed 20M runs, seeds 42/43/44, plus videos) — see the run-batch history table in `doc/noisy-tv-experiment.md`.
 
 **Key metrics to check when diagnosing a failed RND run:**
 
@@ -327,7 +337,7 @@ reflects Bellemare's numbers specifically.
 - `src/` — main source code (agents + shared utilities; see Source Code Structure above)
 - `examples/` — lightweight, standalone reference scripts; keep up to date with current ale_py/gymnasium API
 - `doc/` — investigation write-ups and usage guides (`running-agents.md`, `throughput-investigation.md`, `decisions.md`, `pipeline-history.md`, `hpc-onboarding.md`, `matched-budget-submission.md`, `10M-RND-run-failure-documentation.md`, `rnd-vs-ppo-asymmetry-investigation.md`, `noisy-tv-experiment.md`). **`noisy-tv-experiment.md` is the current/main thesis experiment** (design, metrics, run matrix); `rnd-vs-ppo-asymmetry-investigation.md`, `matched-budget-submission.md`, and `10M-RND-run-failure-documentation.md` are **background/superseded** (see "Current focus" above)
-- `slurm/` — SLURM job scripts for cluster training runs: `run_rnd_smoke.slurm`/`run_ppo_smoke.slurm` (infrastructure smoke tests, minutes-scale, run these first — see `doc/hpc-onboarding.md`), `run_rnd.slurm`/`run_ppo.slurm` (production runs, hours-scale), `run_count_based.slurm` (production, count-based pipeline still under separate setup by the user). `run_rnd_falsify.slurm` was removed 2026-07-14 — its ent_coef hypothesis was reverted (see `doc/decisions.md`) and it was repurposed into `run_rnd_smoke.slurm`. `run_rnd_tv.slurm`/`run_ppo_tv.slurm` run the noisy-TV experiment matrix (10M steps / 8 envs, `TV_MODE` env var selects the condition — see `doc/noisy-tv-experiment.md`).
+- `slurm/` — SLURM job scripts for cluster training runs: `run_rnd_smoke.slurm`/`run_ppo_smoke.slurm` (infrastructure smoke tests, minutes-scale, run these first — see `doc/hpc-onboarding.md`), `run_rnd.slurm`/`run_ppo.slurm` (production runs, hours-scale), `run_count_based.slurm` (production, count-based pipeline still under separate setup by the user). `run_rnd_falsify.slurm` was removed 2026-07-14 — its ent_coef hypothesis was reverted (see `doc/decisions.md`) and it was repurposed into `run_rnd_smoke.slurm`. `run_rnd_tv.slurm`/`run_ppo_tv.slurm` run the noisy-TV experiment matrix (`TV_MODE` env var selects the condition; production batches ran 20M steps / 32 envs via `TOTAL_TIMESTEPS`/`NUM_ENVS`; runs are named `{algo}_tv_{mode}_{RUN_TAG}`, `RUN_TAG` defaulting to `paper` — see `doc/noisy-tv-experiment.md` incl. the run-batch history table).
 - `scripts/` — utility scripts, e.g. `profile_throughput.py` for measuring training SPS, `check_noisy_tv.py` for the noisy-TV wrapper's deterministic self-checks (run before any TV production submission), `analyze_runs.py` for overlay-comparing a batch of TensorBoard runs and emitting a derived-events summary (see “Log Analysis”)
 - `.claude/skills/` — Claude Code skill definitions (see below)
 - `cartpole-training/`, `_static/` — gitignored; training videos/static assets from the CartPole recording example, not relevant to the main project and may not exist in a fresh checkout
