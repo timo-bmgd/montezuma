@@ -7,6 +7,93 @@ file captures *why*.
 
 ---
 
+## 2026-07-29 — Episode conditions aligned to the RND paper (5-min cap, no no-op starts)
+
+**Change:** `make_env` (`src/agents/base.py`) passes
+`max_num_frames_per_episode=18_000` to `gym.make` (5 min of emulator time =
+4,500 agent steps; ALE's v5 default was 108,000 = 30 min) and `noop_max=0`
+(was 30). Applies to every agent, since all build envs through `make_env`.
+Shipped in PR #23.
+
+**Why:** Matches the RND paper's official code — Burda et al.'s `make_atari`
+applies `StickyActionEnv` but no `NoopResetEnv` and uses
+`max_episode_steps=4500` (x4 frames = 18,000); per Machado et al. 2018,
+sticky actions (v5's `repeat_action_probability=0.25`) *replace* random
+no-op resets as the stochasticity source. Side benefits: a behaviourally
+captured (TV-watching) agent cycles episodes ~6x faster instead of idling
+out the 30-min clock, and same-seed resets are now byte-identical (a
+deterministic "first frame", used by `scripts/visualize_preprocessing.py`).
+
+**How to apply / re-evaluate:** Runs before/after the change are
+episode-length-comparable except in the far tail (<0.2% of episodes exceeded
+the new cap in the v2 PPO runs — measured; see the PPO-reuse entry below).
+Typical episodes (~450-580 steps) never hit either cap.
+
+---
+
+## 2026-07-31 — PPO control runs reused across the env-config change
+
+**Change:** No new PPO runs for the final noisy-TV matrix. The six completed
+v2 HPC runs (`ppo_tv_off` / `ppo_tv_remote`, seeds 42/43/44, 20M steps) are
+carried over as the no-intrinsic controls, although they ran under the
+pre-2026-07-31 environment configuration (30-min episode cap, `noop_max=30`)
+while the final RND batch uses the paper-faithful config (5-min cap =
+18,000 frames, no no-op starts). Only the four RND conditions are re-run
+(seeds 100/200/300, spaced >= num_envs so `seed+i` env seeds cannot collide).
+
+**Why (time-constrained, empirically defended):** (1) The episode-cap
+mismatch is measured to be inert for these runs — fewer than 0.2% of episodes
+in any of the six PPO runs exceeded the new 4,500-agent-step cap (per-run:
+14/41,015 · 50/34,413 · 21/43,534 · 19/38,951 · 73/40,101 · 21/35,057;
+mean episode lengths 458–580 steps). (2) No-op starts affect only the first
+<=30 raw frames (<=8 agent steps); sticky actions (p=0.25), the dominant
+stochasticity source (Machado et al. 2018), are present in both configs.
+(3) The `--update-proportion` fix does not apply to `ppo.py` (no predictor),
+so the PPO runs are unaffected by the substantive algorithmic change.
+(4) The PPO arms serve only as the no-intrinsic `tv_action_frac` floor and
+descriptive exploration context; the primary behavioural null for P2 is
+sham-remote, which IS re-run under the final config.
+
+**How to apply / re-evaluate:** State the config split explicitly in the
+methodology (one table row: v1/v2 + PPO = old env config; final RND batch =
+paper config). If reviewers or results demand it, the two PPO arms can be
+re-run later under the final config with the same sbatch pattern
+(`run_ppo_tv.slurm`, TV_MODE=off/remote) — nothing else depends on them.
+
+---
+
+## 2026-07-31 — RND `--update-proportion` default: 0.25 → auto (`min(1, 32/num_envs)`)
+
+**Change:** `src/agents/rnd.py` `--update-proportion` default changed from a
+hard-coded `0.25` to `None` = auto-resolve via the RND paper's scaling rule,
+`min(1, 32/num_envs)` (`resolve_update_proportion()`). Explicit values still
+pass through unchanged. The resolved value is printed at startup and lands in
+the logged/checkpointed args.
+
+**Why:** Burda et al. 2018 define this hyperparameter *relative to a 32-env
+baseline*: they kept 25% of experience *because they ran 128 envs* (32/128), to
+hold the predictor's effective batch — and thereby the intrinsic-reward decay
+rate — constant across env counts. CleanRL (and our copy of it) hard-codes
+0.25, which is only paper-correct at 128 envs. Every completed noisy-TV
+production run (v1 Jupyter batch at 21 envs, v2 HPC batch at 32 envs,
+`update_proportion=0.25` confirmed in the logged hyperparameters) therefore
+trained the predictor at ~1/4 of the paper-equivalent experience rate. Slower
+predictor ⇒ slower novelty decay ⇒ the memorisation gap `G` stays positive
+longer ⇒ **favorable to noisy-TV capture** — a systematic bias, not noise, so
+it must be fixed before further runs and disclosed as a caveat for the
+completed ones.
+
+**How to apply / re-evaluate:** New runs need no flag changes —
+`run_rnd_tv.slurm` passes no `--update-proportion`, so 32-env runs now resolve
+to 1.0. Do **not** resume pre-fix checkpoints under the new default (their
+stored args say 0.25; pass `--update-proportion 0.25` explicitly if such a
+resume is ever needed). When re-running the TV matrix, prefer run seeds spaced
+`>= num_envs` apart (e.g. 100, 200, 300) so the `seed + i` env-seed derivation
+cannot collide across runs (31/32 env seeds collided between the v2 runs
+42/43/44 — inert, since trajectories are policy-driven, but avoidable).
+
+---
+
 ## 2026-07-13 — RND `ent_coef` raised 0.001 → 0.01
 
 **Change:** `src/agents/rnd.py` default `--ent-coef` raised from `0.001` to `0.01`

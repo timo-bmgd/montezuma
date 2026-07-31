@@ -73,7 +73,9 @@ recorded video (in TV runs it covers the on-screen score display; logged
 `episodic_return` is unaffected).
 
 Everything else stays at `rnd.py`'s paper-matched defaults (`--int-coef 1.0`,
-`--ext-coef 2.0`, `ent_coef 0.001`, sticky actions 0.25).
+`--ext-coef 2.0`, `ent_coef 0.001`, sticky actions 0.25;
+`--update-proportion` auto-resolves to `min(1, 32/num_envs)` since 2026-07-31 —
+see `doc/decisions.md` and the caveat below).
 
 ## Metrics to read
 
@@ -111,7 +113,10 @@ Everything else stays at `rnd.py`'s paper-matched defaults (`--int-coef 1.0`,
 
 Launch via `slurm/run_rnd_tv.slurm` / `slurm/run_ppo_tv.slurm`
 (`sbatch --export=ALL,SEED=1,TV_MODE=remote slurm/run_rnd_tv.slurm`) or the
-matrix cell in `training-runs.ipynb`.
+matrix cell in `training-runs.ipynb`. Runs launched after 2026-07-31 are named
+`{algo}_tv_{mode}_{RUN_TAG}` with `RUN_TAG` defaulting to `paper` (the
+paper-faithful config), so they are distinguishable from the earlier batches
+at a glance; export `RUN_TAG=""` for the legacy naming.
 
 | # | Agent | TV_MODE | Seeds | Status | Purpose |
 |---|---|---|---|---|---|
@@ -125,6 +130,18 @@ matrix cell in `training-runs.ipynb`.
 
 Budget: 7 core runs × ~15–19 h (prior runs sustained SPS 144–183) ≈ 110–135
 GPU-h.
+
+### Run batch history
+
+| batch | agent code | steps / envs | seeds | env config | update_prop. | run names |
+|---|---|---|---|---|---|---|
+| v1 (Jupyter, ~2026-07-20) | pre-fix | 10M / 21 | 1, 2 | legacy (30-min cap, no-ops 30) | 0.25 | `{algo}_tv_{mode}__{seed}` |
+| v2 (HPC, ~2026-07-26) | pre-fix | 20M / 32 | 42, 43, 44 | legacy | 0.25 | `{algo}_tv_{mode}__{seed}` |
+| SCHWERT (HPC, 2026-07-31→) | paper-faithful | 20M / 32 | 100, 200, 300 | paper (5-min cap, no no-ops) | auto → 1.0 | `rnd_tv_{mode}_SCHWERT__{seed}` |
+
+SCHWERT re-runs the four RND conditions only; the six v2 PPO runs are carried
+over as the no-intrinsic controls (see caveats below and `doc/decisions.md`).
+Seeds are spaced >= num_envs so `seed+i` env seeds cannot collide across runs.
 
 ## Analysis checklist
 
@@ -140,6 +157,26 @@ GPU-h.
    patch flickers.
 
 ## Caveats to carry into the thesis write-up
+
+- **The PPO control runs are reused from the pre-2026-07-31 environment
+  configuration** (30-min episode cap, `noop_max=30`), while the final RND
+  batch runs the paper-faithful config (5-min cap, no no-op starts). Verified
+  benign: fewer than 0.2% of episodes in any of the six PPO runs exceeded the
+  new 4,500-step cap (means 458--580 steps; worst run: 73 of 40,101 episodes),
+  no-op starts affect only the first <=8 agent steps while sticky actions
+  (p=0.25, present in both configs) dominate stochasticity, and the
+  update-proportion fix does not apply to PPO (no predictor). The PPO arms
+  serve only as the no-intrinsic `tv_action_frac` floor and descriptive
+  exploration context; the primary behavioural null (sham-remote) is re-run
+  under the final config. See `doc/decisions.md` 2026-07-31.
+- **All pre-2026-07-31 runs trained the RND predictor ~4x slower than
+  paper-equivalent.** The hard-coded `--update-proportion 0.25` is Burda et
+  al.'s value *for 128 envs* (their rule pins the predictor's effective batch
+  to a 32-env baseline, i.e. keep 32/num_envs of the experience); at our
+  21/32 envs the paper-faithful value is 1.0. Slower predictor = slower
+  novelty decay = favorable to capture — disclose when interpreting the v1/v2
+  batches; fixed for subsequent runs (auto rule in `rnd.py`,
+  `doc/decisions.md` 2026-07-31).
 
 - The known gymnasium `NEXT_STEP` autoreset / GAE-masking bug
   (`doc/decisions.md`, 2026-07-13) is present in all conditions equally; the

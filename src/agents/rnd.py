@@ -109,8 +109,13 @@ def parse_args():
                    help="Weight of intrinsic advantages in combined advantage")
     p.add_argument("--ext-coef", type=float, default=2.0,
                    help="Weight of extrinsic advantages in combined advantage")
-    p.add_argument("--update-proportion", type=float, default=0.25,
-                   help="Fraction of minibatch samples used to train the RND predictor")
+    p.add_argument("--update-proportion", type=float, default=None,
+                   help="Fraction of minibatch samples used to train the RND predictor. "
+                        "Default: auto = min(1, 32/num_envs), the RND paper's scaling rule "
+                        "(predictor's effective batch pinned to the 32-env baseline; Burda "
+                        "et al. 2018 used 0.25 *at 128 envs* = 32/128). The pre-2026-07-31 "
+                        "hard-coded 0.25 trained the predictor 4x too slowly at 32 envs — "
+                        "see doc/decisions.md. Pass an explicit value to override.")
     p.add_argument("--obs-norm-init-steps", type=int, default=50,
                    help="Iterations of random rollouts to initialize obs running stats")
     # infrastructure
@@ -292,6 +297,20 @@ def _load_checkpoint(path, agent, rnd_model, optimizer, obs_rms, reward_rms, rew
     return ckpt["iteration"], ckpt["global_step"]
 
 
+def resolve_update_proportion(update_proportion, num_envs):
+    """RND paper scaling rule for the predictor's training fraction.
+
+    Burda et al. 2018 pin the predictor's effective batch to a 32-env baseline:
+    with 128 envs they keep 25% of the experience (32/128). A hard-coded 0.25 at
+    32 envs therefore trains the predictor 4x slower than paper-equivalent —
+    novelty decays slower, which is favorable to noisy-TV capture and must not
+    be an accident of the launch script. Explicit values pass through untouched.
+    """
+    if update_proportion is not None:
+        return update_proportion
+    return min(1.0, 32.0 / num_envs)
+
+
 def _normalize_obs(obs_np, obs_rms, device):
     """Normalise a (N, 1, 84, 84) float32 array with running stats, clip to ±5."""
     mean = torch.from_numpy(obs_rms.mean).to(device)
@@ -313,6 +332,10 @@ def train():
     # wrapper never runs its own check, but the occlusion diagnostic still
     # slices with these values (numpy would silently clamp an oversized region).
     check_tv_geometry(tuple(args.tv_size), tuple(args.tv_position), args.tv_refresh_every)
+    # Resolve before wandb/TensorBoard config logging and checkpointing so the
+    # recorded args always carry the concrete value that was trained with.
+    args.update_proportion = resolve_update_proportion(args.update_proportion, args.num_envs)
+    print(f"update_proportion = {args.update_proportion}")
 
     batch_size = args.num_envs * args.num_steps
     minibatch_size = batch_size // args.num_minibatches

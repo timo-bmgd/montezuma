@@ -51,6 +51,9 @@
 # Usage (submit from the project root -- #SBATCH --output and PROJECT_DIR
 # both assume it; slurm-logs/ is committed to the repo so it always exists):
 #   sbatch --export=ALL,SEED=1,TV_MODE=remote slurm/run_rnd_tv.slurm
+# Run naming: exp_name = "rnd_tv_<mode>_<RUN_TAG>". RUN_TAG defaults to
+# "paper" (post-2026-07-31 paper-faithful config: 5-min cap, no no-op starts,
+# auto update-proportion). Export RUN_TAG="" to reproduce the old naming.
 #   sbatch --export=ALL,SEED=2,TV_MODE=remote slurm/run_rnd_tv.slurm
 #   sbatch --export=ALL,SEED=1,TV_MODE=off slurm/run_rnd_tv.slurm
 #   ...
@@ -93,9 +96,11 @@ if [ -n "${RESUME_FROM:-}" ]; then
     RESUME_ARGS=(--resume "$RESUME_FROM")
 fi
 
+RUN_TAG="${RUN_TAG-paper}"
+
 python src/agents/rnd.py \
     --env-id ALE/MontezumaRevenge-v5 \
-    --exp-name "rnd_tv_${TV_MODE}" \
+    --exp-name "rnd_tv_${TV_MODE}${RUN_TAG:+_${RUN_TAG}}" \
     --tv-mode "$TV_MODE" \
     --total-timesteps "${TOTAL_TIMESTEPS:-10000000}" \
     --num-envs "${NUM_ENVS:-32}" \
