@@ -131,6 +131,18 @@ at a glance; export `RUN_TAG=""` for the legacy naming.
 Budget: 7 core runs × ~15–19 h (prior runs sustained SPS 144–183) ≈ 110–135
 GPU-h.
 
+### Run batch history
+
+| batch | agent code | steps / envs | seeds | env config | update_prop. | run names |
+|---|---|---|---|---|---|---|
+| v1 (Jupyter, ~2026-07-20) | pre-fix | 10M / 21 | 1, 2 | legacy (30-min cap, no-ops 30) | 0.25 | `{algo}_tv_{mode}__{seed}` |
+| v2 (HPC, ~2026-07-26) | pre-fix | 20M / 32 | 42, 43, 44 | legacy | 0.25 | `{algo}_tv_{mode}__{seed}` |
+| SCHWERT (HPC, 2026-07-31→) | paper-faithful | 20M / 32 | 100, 200, 300 | paper (5-min cap, no no-ops) | auto → 1.0 | `rnd_tv_{mode}_SCHWERT__{seed}` |
+
+SCHWERT re-runs the four RND conditions only; the six v2 PPO runs are carried
+over as the no-intrinsic controls (see caveats below and `doc/decisions.md`).
+Seeds are spaced >= num_envs so `seed+i` env seeds cannot collide across runs.
+
 ## Analysis checklist
 
 1. `tv_action_frac` over training for #2 vs #3 vs #5 — the capture plot.

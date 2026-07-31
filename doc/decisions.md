@@ -7,6 +7,30 @@ file captures *why*.
 
 ---
 
+## 2026-07-29 — Episode conditions aligned to the RND paper (5-min cap, no no-op starts)
+
+**Change:** `make_env` (`src/agents/base.py`) passes
+`max_num_frames_per_episode=18_000` to `gym.make` (5 min of emulator time =
+4,500 agent steps; ALE's v5 default was 108,000 = 30 min) and `noop_max=0`
+(was 30). Applies to every agent, since all build envs through `make_env`.
+Shipped in PR #23.
+
+**Why:** Matches the RND paper's official code — Burda et al.'s `make_atari`
+applies `StickyActionEnv` but no `NoopResetEnv` and uses
+`max_episode_steps=4500` (x4 frames = 18,000); per Machado et al. 2018,
+sticky actions (v5's `repeat_action_probability=0.25`) *replace* random
+no-op resets as the stochasticity source. Side benefits: a behaviourally
+captured (TV-watching) agent cycles episodes ~6x faster instead of idling
+out the 30-min clock, and same-seed resets are now byte-identical (a
+deterministic "first frame", used by `scripts/visualize_preprocessing.py`).
+
+**How to apply / re-evaluate:** Runs before/after the change are
+episode-length-comparable except in the far tail (<0.2% of episodes exceeded
+the new cap in the v2 PPO runs — measured; see the PPO-reuse entry below).
+Typical episodes (~450-580 steps) never hit either cap.
+
+---
+
 ## 2026-07-31 — PPO control runs reused across the env-config change
 
 **Change:** No new PPO runs for the final noisy-TV matrix. The six completed
@@ -67,6 +91,10 @@ resume is ever needed). When re-running the TV matrix, prefer run seeds spaced
 `>= num_envs` apart (e.g. 100, 200, 300) so the `seed + i` env-seed derivation
 cannot collide across runs (31/32 env seeds collided between the v2 runs
 42/43/44 — inert, since trajectories are policy-driven, but avoidable).
+
+---
+
+## 2026-07-13 — RND `ent_coef` raised 0.001 → 0.01
 
 **Change:** `src/agents/rnd.py` default `--ent-coef` raised from `0.001` to `0.01`
 (10x), matching the value already used in `count_based.py` and `ppo.py`.
