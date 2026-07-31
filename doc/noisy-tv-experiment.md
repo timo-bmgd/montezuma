@@ -73,7 +73,9 @@ recorded video (in TV runs it covers the on-screen score display; logged
 `episodic_return` is unaffected).
 
 Everything else stays at `rnd.py`'s paper-matched defaults (`--int-coef 1.0`,
-`--ext-coef 2.0`, `ent_coef 0.001`, sticky actions 0.25).
+`--ext-coef 2.0`, `ent_coef 0.001`, sticky actions 0.25;
+`--update-proportion` auto-resolves to `min(1, 32/num_envs)` since 2026-07-31 —
+see `doc/decisions.md` and the caveat below).
 
 ## Metrics to read
 
@@ -140,6 +142,15 @@ GPU-h.
    patch flickers.
 
 ## Caveats to carry into the thesis write-up
+
+- **All pre-2026-07-31 runs trained the RND predictor ~4x slower than
+  paper-equivalent.** The hard-coded `--update-proportion 0.25` is Burda et
+  al.'s value *for 128 envs* (their rule pins the predictor's effective batch
+  to a 32-env baseline, i.e. keep 32/num_envs of the experience); at our
+  21/32 envs the paper-faithful value is 1.0. Slower predictor = slower
+  novelty decay = favorable to capture — disclose when interpreting the v1/v2
+  batches; fixed for subsequent runs (auto rule in `rnd.py`,
+  `doc/decisions.md` 2026-07-31).
 
 - The known gymnasium `NEXT_STEP` autoreset / GAE-masking bug
   (`doc/decisions.md`, 2026-07-13) is present in all conditions equally; the

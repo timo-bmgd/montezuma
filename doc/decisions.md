@@ -7,7 +7,35 @@ file captures *why*.
 
 ---
 
-## 2026-07-13 — RND `ent_coef` raised 0.001 → 0.01
+## 2026-07-31 — RND `--update-proportion` default: 0.25 → auto (`min(1, 32/num_envs)`)
+
+**Change:** `src/agents/rnd.py` `--update-proportion` default changed from a
+hard-coded `0.25` to `None` = auto-resolve via the RND paper's scaling rule,
+`min(1, 32/num_envs)` (`resolve_update_proportion()`). Explicit values still
+pass through unchanged. The resolved value is printed at startup and lands in
+the logged/checkpointed args.
+
+**Why:** Burda et al. 2018 define this hyperparameter *relative to a 32-env
+baseline*: they kept 25% of experience *because they ran 128 envs* (32/128), to
+hold the predictor's effective batch — and thereby the intrinsic-reward decay
+rate — constant across env counts. CleanRL (and our copy of it) hard-codes
+0.25, which is only paper-correct at 128 envs. Every completed noisy-TV
+production run (v1 Jupyter batch at 21 envs, v2 HPC batch at 32 envs,
+`update_proportion=0.25` confirmed in the logged hyperparameters) therefore
+trained the predictor at ~1/4 of the paper-equivalent experience rate. Slower
+predictor ⇒ slower novelty decay ⇒ the memorisation gap `G` stays positive
+longer ⇒ **favorable to noisy-TV capture** — a systematic bias, not noise, so
+it must be fixed before further runs and disclosed as a caveat for the
+completed ones.
+
+**How to apply / re-evaluate:** New runs need no flag changes —
+`run_rnd_tv.slurm` passes no `--update-proportion`, so 32-env runs now resolve
+to 1.0. Do **not** resume pre-fix checkpoints under the new default (their
+stored args say 0.25; pass `--update-proportion 0.25` explicitly if such a
+resume is ever needed). When re-running the TV matrix, prefer run seeds spaced
+`>= num_envs` apart (e.g. 100, 200, 300) so the `seed + i` env-seed derivation
+cannot collide across runs (31/32 env seeds collided between the v2 runs
+42/43/44 — inert, since trajectories are policy-driven, but avoidable).
 
 **Change:** `src/agents/rnd.py` default `--ent-coef` raised from `0.001` to `0.01`
 (10x), matching the value already used in `count_based.py` and `ppo.py`.
