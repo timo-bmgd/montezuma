@@ -1,0 +1,499 @@
+<title>rnd.py — class diagrams</title>
+<style>
+  :root {
+    --plane: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --border: rgba(11, 11, 11, 0.10);
+    --edge: #898781;
+    --tip-bg: #262521;
+    --tip-ink: #fcfcfb;
+    --gb: #2a78d6;  /* Agent / policy */
+    --ga: #1baf7a;  /* RND / intrinsic */
+    --gy: #eda100;  /* orchestration */
+    --gg: #008300;  /* base.py repo code */
+    --gv: #4a3aa7;  /* library code */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --plane: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --border: rgba(255, 255, 255, 0.10);
+      --edge: #898781;
+      --tip-bg: #f0efec;
+      --tip-ink: #1a1a19;
+      --gb: #3987e5;
+      --ga: #199e70;
+      --gy: #c98500;
+      --gg: #008300;
+      --gv: #9085e9;
+    }
+  }
+  :root[data-theme="light"] {
+    --plane: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e;
+    --muted: #898781; --grid: #e1e0d9; --border: rgba(11,11,11,0.10);
+    --edge: #898781; --tip-bg: #262521; --tip-ink: #fcfcfb;
+    --gb: #2a78d6; --ga: #1baf7a; --gy: #eda100; --gg: #008300; --gv: #4a3aa7;
+  }
+  :root[data-theme="dark"] {
+    --plane: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7;
+    --muted: #898781; --grid: #2c2c2a; --border: rgba(255,255,255,0.10);
+    --edge: #898781; --tip-bg: #f0efec; --tip-ink: #1a1a19;
+    --gb: #3987e5; --ga: #199e70; --gy: #c98500; --gg: #008300; --gv: #9085e9;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--plane); color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .page { max-width: 1120px; margin: 0 auto; padding: 28px 24px 56px; }
+  h1 { font-size: 21px; margin: 0 0 2px; letter-spacing: -0.01em; }
+  .sub { color: var(--ink-2); font-size: 13px; margin: 0 0 18px; }
+  .sub code, .note code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  h2 { font-size: 15px; margin: 34px 0 4px; }
+  .cap { color: var(--ink-2); font-size: 12.5px; margin: 0 0 12px; max-width: 72ch; }
+
+  /* legend */
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center;
+            padding: 10px 14px; background: var(--surface); border: 1px solid var(--border);
+            border-radius: 8px; font-size: 12px; color: var(--ink-2); }
+  .lg { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+  .sw.dash { background: none; border: 1.5px dashed var(--muted); }
+
+  /* canvas */
+  .scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px;
+            background: var(--surface); }
+  .canvas { position: relative; width: 1060px; }
+  .canvas svg { position: absolute; inset: 0; pointer-events: none; }
+  .edge { stroke: var(--edge); stroke-width: 1.6; fill: none; }
+  .elab { font: 10.5px ui-monospace, SFMono-Regular, Menlo, monospace; fill: var(--ink-2);
+          paint-order: stroke; stroke: var(--surface); stroke-width: 5px; stroke-linejoin: round; }
+
+  /* cards */
+  .card { position: absolute; background: var(--surface); border: 1px solid var(--border);
+          border-radius: 7px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+  .card.dashed { border: 1.5px dashed var(--muted); }
+  .card:focus-visible { outline: 2px solid var(--g); outline-offset: 2px; }
+  .card-h { display: flex; align-items: baseline; gap: 7px; padding: 7px 12px 6px;
+            background: color-mix(in srgb, var(--g) 13%, var(--surface));
+            border-bottom: 1px solid var(--border); }
+  .chip { width: 9px; height: 9px; border-radius: 2px; background: var(--g); flex: none;
+          align-self: center; }
+  .stereo { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-2); }
+  .cname { font: 700 13px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
+  .lref { margin-left: auto; font: 10.5px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+  .g-blue { --g: var(--gb); } .g-aqua { --g: var(--ga); } .g-yellow { --g: var(--gy); }
+  .g-green { --g: var(--gg); } .g-violet { --g: var(--gv); } .g-none { --g: var(--muted); }
+
+  .row { padding: 5px 12px 4px; }
+  .row + .row { border-top: 1px solid color-mix(in srgb, var(--grid) 55%, var(--surface)); }
+  .m { display: block; font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
+  .d { display: block; font-size: 11.5px; color: var(--ink-2); line-height: 1.35; }
+  .sep { height: 0; border-top: 2px solid var(--grid); }
+  .fchip { display: inline-block; font-size: 10px; padding: 1px 6px; border: 1px solid var(--muted);
+           border-radius: 999px; color: var(--ink-2); margin-left: 6px; vertical-align: 1px; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* table view */
+  details { margin-top: 26px; border: 1px solid var(--border); border-radius: 8px;
+            background: var(--surface); }
+  summary { cursor: pointer; padding: 10px 14px; font-size: 13px; font-weight: 600; }
+  .tbl-wrap { overflow-x: auto; padding: 0 14px 14px; }
+  table { border-collapse: collapse; font-size: 12px; min-width: 780px; }
+  th, td { text-align: left; padding: 5px 14px 5px 0; border-bottom: 1px solid var(--grid);
+           vertical-align: top; }
+  th { color: var(--ink-2); font-weight: 600; font-size: 11px; text-transform: uppercase;
+       letter-spacing: 0.05em; }
+  td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+            white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .gdot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+
+  .note { color: var(--ink-2); font-size: 12px; margin-top: 18px; max-width: 78ch; }
+
+  /* tooltip */
+  #tip { position: fixed; display: none; max-width: 360px; z-index: 10; pointer-events: none;
+         background: var(--tip-bg); color: var(--tip-ink); font-size: 11.5px; line-height: 1.45;
+         padding: 8px 11px; border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,0.25); }
+</style>
+
+<div class="page">
+  <h1>rnd.py — class diagrams</h1>
+  <p class="sub">Structure of <code>src/agents/rnd.py</code> (706 lines) alone, then with
+  <code>src/agents/base.py</code> (458 lines) and the environment wrapper stack.
+  Snapshot: branch <code>fix-update-proportion</code>. Hover or focus any box for details.</p>
+
+  <div class="legend" role="list">
+    <span class="lg" role="listitem"><span class="sw" style="background:var(--gb)"></span>Agent / policy</span>
+    <span class="lg" role="listitem"><span class="sw" style="background:var(--ga)"></span>RND / intrinsic stream</span>
+    <span class="lg" role="listitem"><span class="sw" style="background:var(--gy)"></span>orchestration</span>
+    <span class="lg" role="listitem"><span class="sw" style="background:var(--gg)"></span>base.py (repo code)</span>
+    <span class="lg" role="listitem"><span class="sw" style="background:var(--gv)"></span>library code (gymnasium · ale_py · torch)</span>
+    <span class="lg" role="listitem"><span class="sw dash"></span>conditional (flag- or mode-gated)</span>
+  </div>
+
+  <h2>1 · rnd.py alone — one file, the whole training system</h2>
+  <p class="cap">Two <code>nn.Module</code> classes (the policy-side <code>Agent</code>, the
+  curiosity-side <code>RNDModel</code>), one optimizer over both, and a <code>train()</code>
+  function that orchestrates everything. Arrows point from user to used.</p>
+
+  <div class="scroll"><div class="canvas" style="height: 952px;">
+    <svg width="1060" height="952" aria-hidden="true">
+      <defs>
+        <marker id="ah" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 1 L 9 5 L 0 9 z" fill="#898781"></path>
+        </marker>
+      </defs>
+      <line class="edge" x1="180" y1="660" x2="180" y2="412" marker-end="url(#ah)"></line>
+      <text class="elab" x="188" y="560">constructs · calls every rollout step + update</text>
+      <line class="edge" x1="564" y1="392" x2="500" y2="392" marker-end="url(#ah)"></line>
+      <line class="edge" x1="806" y1="348" x2="806" y2="282" marker-end="url(#ah)"></line>
+      <line class="edge" x1="594" y1="660" x2="594" y2="600" marker-end="url(#ah)"></line>
+      <text class="elab" x="604" y="638">normalises intr_buf</text>
+      <line class="edge" x1="628" y1="712" x2="646" y2="712" marker-end="url(#ah)"></line>
+    </svg>
+
+    <div class="card g-blue" style="left:24px; top:64px; width:470px;" tabindex="0"
+      data-tip="Agent — 1,407,476 parameters at 18 actions (1,407,925 at 19 with the TV remote). Trunk 996,192 · actor 209,234 · extra_layer + critics 202,050. One forward pass serves all three heads: hidden = network(x/255) is computed once, then actor and both critics read it. std=0.01 heads start the policy uniform: initial entropy = ln(18) exactly.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">nn.Module</span><span class="cname">Agent</span><span class="lref">rnd.py:152</span></div>
+      <div class="row"><span class="m">network</span>
+        <span class="d">Sequential trunk — conv 8×8 s4 → conv 4×4 s2 → conv 3×3 s1</span>
+        <span class="d">→ flatten 3136 → 256 → 448 · ReLU · <span class="num">996,192</span> params</span></div>
+      <div class="row"><span class="m">extra_layer</span>
+        <span class="d">Linear 448→448 (std 0.1) · residual added before both critics</span></div>
+      <div class="row"><span class="m">actor</span>
+        <span class="d">Linear 448→448 → 448→n (std 0.01) → logits</span>
+        <span class="d">→ Categorical(logits) → sampled action, log-prob, entropy</span></div>
+      <div class="row"><span class="m">critic_ext</span>
+        <span class="d">Linear 448→1 → V_ext — forecasts future game score (γ 0.999)</span></div>
+      <div class="row"><span class="m">critic_int</span>
+        <span class="d">Linear 448→1 → V_int — forecasts future novelty reward (γ 0.99)</span></div>
+      <div class="sep"></div>
+      <div class="row"><span class="m">get_value(x)</span>
+        <span class="d">→ (V_ext, V_int) — bootstrap values for GAE</span></div>
+      <div class="row"><span class="m">get_action_and_value(x, action=None)</span>
+        <span class="d">→ (action, log-prob, entropy, V_ext, V_int)</span></div>
+    </div>
+
+    <div class="card g-aqua" style="left:564px; top:64px; width:470px;" tabindex="0"
+      data-tip="RNDModel is bigger than the whole Agent: target 1,677,984 params (frozen), predictor 2,203,296 (trained — 3 extra Linear 512→512 layers give it the capacity to imitate the target). Input is NOT the 4-frame stack: only the newest frame, whitened per pixel ((x−μ)/σ, clip ±5) by obs_rms.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">nn.Module</span><span class="cname">RNDModel</span><span class="lref">rnd.py:203</span></div>
+      <div class="row"><span class="m">target<span class="fchip">❄ frozen — requires_grad=False</span></span>
+        <span class="d">conv stack (1×84×84 whitened frame) → 512-dim embedding</span>
+        <span class="d">random at init, never trained — the fixed “answer key”</span></div>
+      <div class="row"><span class="m">predictor</span>
+        <span class="d">same conv stack → 512 → 512 → 512 · trained to match target</span></div>
+      <div class="sep"></div>
+      <div class="row"><span class="m">forward(x)</span>
+        <span class="d">→ (predictor(x), target(x))</span>
+        <span class="d">intrinsic reward = ‖target − predictor‖² / 2 (helper <span class="num">_rnd_error :321</span>)</span></div>
+    </div>
+
+    <div class="card g-violet" style="left:564px; top:348px; width:470px;" tabindex="0"
+      data-tip="One optimizer for everything trainable: combined_params = list(agent.parameters()) + list(rnd_model.predictor.parameters()) (rnd.py:402). The frozen target is simply not in the list. lr linearly annealed to 0 when --anneal-lr (default on); grad-norm clipped at 0.5.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">torch.optim</span><span class="cname">Adam</span><span class="lref">rnd.py:402–403</span></div>
+      <div class="row"><span class="m">combined_params = agent ∪ rnd_model.predictor</span>
+        <span class="d">lr 1e-4 · eps 1e-5 — arrows: all Agent params ←, predictor only ↑ (target excluded)</span></div>
+    </div>
+
+    <div class="card g-aqua" style="left:564px; top:480px; width:225px;" tabindex="0"
+      data-tip="Per-env discounted running sum of intrinsic rewards: rewems = rewems·γ_int + r. Its std (via reward_rms) is the divisor that normalises intr_buf each iteration — intrinsic rewards have no natural scale, so they are divided by the std of their own running return.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">class</span><span class="cname">RewardForwardFilter</span><span class="lref">rnd.py:246</span></div>
+      <div class="row"><span class="m">update(rews)</span>
+        <span class="d">rewems = rewems·γ + r</span>
+        <span class="d">feeds reward_rms → intr_buf /= √var</span></div>
+    </div>
+
+    <div class="card g-violet" style="left:809px; top:480px; width:225px;" tabindex="0"
+      data-tip="Imported from gymnasium.wrappers.utils. obs_rms holds per-pixel mean/var of the newest frame, shape (1,1,84,84) — warmed up by 50 iterations of random play before training, updated every iteration. reward_rms is a scalar for intrinsic-reward scaling. Both are checkpointed.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">gymnasium</span><span class="cname">RunningMeanStd</span></div>
+      <div class="row"><span class="m">obs_rms (1,1,84,84)</span>
+        <span class="d">per-pixel whitening stats</span></div>
+      <div class="row"><span class="m">reward_rms</span>
+        <span class="d">intrinsic reward scale</span></div>
+    </div>
+
+    <div class="card g-yellow" style="left:24px; top:660px; width:604px;" tabindex="0"
+      data-tip="Everything happens inside train() — there is no Trainer class. Batch: 128 steps × num_envs (production: 32) = 4,096 samples per iteration; 4 epochs × 4 minibatches = 16 optimizer steps per batch. One combined loss: pg_loss − 0.001·entropy + 0.5·(ext_v_loss + int_v_loss) + fwd_loss, where fwd_loss trains the RND predictor on an update_proportion random subset.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">function</span><span class="cname">train()</span><span class="lref">rnd.py:327</span></div>
+      <div class="row"><span class="d">1 · <span class="num">parse_args()</span> · resolve_update_proportion → auto min(1, 32/num_envs)</span></div>
+      <div class="row"><span class="d">2 · build vector env: [make_env(…) per env] → Async/SyncVectorEnv <span class="num">:373</span></span></div>
+      <div class="row"><span class="d">3 · construct Agent · RNDModel · Adam(combined_params) <span class="num">:400–403</span></span></div>
+      <div class="row"><span class="d">4 · obs-norm warm-up: random actions → obs_rms <span class="num">:429–441</span></span></div>
+      <div class="row"><span class="d">5 · per iteration: 128-step rollout → intr_buf = _rnd_error(whitened newest frame) <span class="num">:459–507</span></span></div>
+      <div class="row"><span class="d">6 · normalise intrinsic: RewardForwardFilter + reward_rms <span class="num">:509–519</span></span></div>
+      <div class="row"><span class="d">7 · dual GAE: ext (γ .999, episodic) + int (γ .99, non-episodic) → b_adv = 2·ext + 1·int <span class="num">:521–548</span></span></div>
+      <div class="row"><span class="d">8 · 4 epochs × 4 minibatches: PPO clip + value losses + entropy + fwd_loss <span class="num">:580–632</span></span></div>
+      <div class="row"><span class="d">9 · TensorBoard logging · auto-stop (exit 42) · checkpoints <span class="num">:634–699</span></span></div>
+    </div>
+
+    <div class="card g-yellow" style="left:648px; top:660px; width:386px;" tabindex="0"
+      data-tip="Module-level helpers, all called from train(). _load_checkpoint runs check_tv_args_match BEFORE restoring any state, so a wrong --tv-* resume dies with an actionable message instead of a shape error (or worse, silently swapping the experiment for remote↔sham-remote, which load cleanly into identical shapes).">
+      <div class="card-h"><span class="chip"></span><span class="stereo">functions</span><span class="cname">module helpers</span><span class="lref">rnd.py</span></div>
+      <div class="row"><span class="m">parse_args() <span class="lref">:40</span></span>
+        <span class="d">~45 CLI flags: ppo · rnd · tv · auto-stop · infra</span></div>
+      <div class="row"><span class="m">_save_checkpoint / _load_checkpoint <span class="lref">:261 / :281</span></span>
+        <span class="d">full state incl. rms stats; TV-flag guard before restore</span></div>
+      <div class="row"><span class="m">resolve_update_proportion <span class="lref">:300</span></span>
+        <span class="d">RND-paper env-count rule: min(1, 32/num_envs)</span></div>
+      <div class="row"><span class="m">_normalize_obs <span class="lref">:314</span></span>
+        <span class="d">(x − μ)/σ per pixel, clip ±5 — RND input whitening</span></div>
+      <div class="row"><span class="m">_rnd_error <span class="lref">:321</span></span>
+        <span class="d">‖target − predictor‖²/2 → raw intrinsic reward</span></div>
+    </div>
+  </div></div>
+
+  <h2>2 · rnd.py + base.py + the environment</h2>
+  <p class="cap">Same rnd.py, compressed to three cards (left), the shared toolbox it imports
+  from base.py (middle), and one sub-env as <code>make_env()</code> assembles it,
+  inner→outer (right). Green layers in the stack are repo code; violet layers ship with
+  gymnasium / ale_py.</p>
+
+  <div class="scroll"><div class="canvas" style="height: 1045px;">
+    <svg width="1060" height="1045" aria-hidden="true">
+      <line class="edge" x1="328" y1="190" x2="356" y2="190" marker-end="url(#ah2)"></line>
+      <text class="elab" x="300" y="178">×32</text>
+      <line class="edge" x1="664" y1="190" x2="692" y2="190" marker-end="url(#ah2)"></line>
+      <text class="elab" x="600" y="178">builds ↓</text>
+      <line class="edge" x1="328" y1="240" x2="356" y2="330" marker-end="url(#ah2)"></line>
+      <line class="edge" x1="328" y1="380" x2="356" y2="478" marker-end="url(#ah2)"></line>
+      <line class="edge" x1="328" y1="505" x2="356" y2="492" marker-end="url(#ah2)"></line>
+      <defs>
+        <marker id="ah2" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 1 L 9 5 L 0 9 z" fill="#898781"></path>
+        </marker>
+      </defs>
+      <line class="edge" x1="866" y1="199" x2="866" y2="218" marker-end="url(#ah2)"></line>
+      <line class="edge" x1="866" y1="281" x2="866" y2="300" marker-end="url(#ah2)"></line>
+      <line class="edge" x1="866" y1="385" x2="866" y2="404" marker-end="url(#ah2)"></line>
+      <line class="edge" x1="866" y1="546" x2="866" y2="565" marker-end="url(#ah2)"></line>
+      <line class="edge" x1="866" y1="628" x2="866" y2="647" marker-end="url(#ah2)"></line>
+      <line class="edge" x1="866" y1="710" x2="866" y2="729" marker-end="url(#ah2)"></line>
+      <line class="edge" x1="866" y1="792" x2="866" y2="811" marker-end="url(#ah2)"></line>
+      <line class="edge" x1="866" y1="914" x2="866" y2="933" marker-end="url(#ah2)"></line>
+    </svg>
+
+    <div class="card g-yellow" style="left:24px; top:64px; width:304px;" tabindex="0"
+      data-tip="706 lines. Self-contained runnable script: python src/agents/rnd.py. Contains its own PPO implementation — ppo.py is a separate baseline, not a dependency.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">file</span><span class="cname">src/agents/rnd.py</span><span class="lref">706 ln</span></div>
+    </div>
+    <div class="card g-green" style="left:360px; top:64px; width:304px;" tabindex="0"
+      data-tip="458 lines. Shared toolbox imported by all four agents (rnd, ppo, count_based, count_based_ae): env factory, wrappers, GAE, init and masking helpers.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">file</span><span class="cname">src/agents/base.py</span><span class="lref">458 ln</span></div>
+    </div>
+    <div class="card g-violet" style="left:696px; top:64px; width:340px;" tabindex="0"
+      data-tip="The wrapper stack one sub-env is wrapped in, inner (top) to outer (bottom). The observation flows down through every layer each step; train() only ever sees the outermost interface.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">runtime object</span><span class="cname">one sub-env</span><span class="lref">make_env()</span></div>
+    </div>
+
+    <div class="card g-yellow" style="left:24px; top:140px; width:304px;" tabindex="0"
+      data-tip="Orchestrator: builds the vector env from 32 make_env thunks, owns the rollout + update loop, calls compute_gae twice per iteration (extrinsic episodic / intrinsic non-episodic) and masked_mean inside every minibatch loss.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">function</span><span class="cname">train()</span><span class="lref">:327</span></div>
+      <div class="row"><span class="d">builds envs via make_env ×32 → AsyncVectorEnv</span></div>
+      <div class="row"><span class="d">rollout → intrinsic rewards → dual GAE → PPO+RND update</span></div>
+      <div class="row"><span class="d">uses compute_gae · masked_mean each iteration</span></div>
+    </div>
+
+    <div class="card g-blue" style="left:24px; top:310px; width:304px;" tabindex="0"
+      data-tip="Policy network: trunk (conv → 448) + actor + critic_ext + critic_int. 1.4M params. Every layer initialised through base.py's layer_init (orthogonal, std √2 / 0.1 / 0.01).">
+      <div class="card-h"><span class="chip"></span><span class="stereo">nn.Module</span><span class="cname">Agent</span><span class="lref">:152</span></div>
+      <div class="row"><span class="d">trunk → hidden(448) → actor + critic_ext + critic_int</span></div>
+      <div class="row"><span class="d">input: (4,84,84) stack / 255</span></div>
+    </div>
+
+    <div class="card g-aqua" style="left:24px; top:460px; width:304px;" tabindex="0"
+      data-tip="Curiosity module: frozen random target vs trained predictor, both on the whitened newest frame only. Also initialised via layer_init. Its remote_action_index convention comes from NoisyTVWrapper (used at rnd.py:653 for tv_action_frac).">
+      <div class="card-h"><span class="chip"></span><span class="stereo">nn.Module</span><span class="cname">RNDModel</span><span class="lref">:203</span></div>
+      <div class="row"><span class="d">target ❄ frozen · predictor trained</span></div>
+      <div class="row"><span class="d">input: (1,84,84) whitened newest frame</span></div>
+    </div>
+
+    <div class="card g-none" style="left:24px; top:600px; width:304px;" tabindex="0"
+      data-tip="The full import list at rnd.py:35–37. NoisyTVWrapper is imported only for its remote_action_index static method — the wrapper instances themselves live inside the sub-envs, built by make_env.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">imports</span><span class="cname">agents.base</span><span class="lref">:35–37</span></div>
+      <div class="row"><span class="d" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace">layer_init · make_env · compute_gae ·
+        masked_mean · NoisyTVWrapper · check_tv_geometry · check_tv_args_match · tv_region_slices</span></div>
+    </div>
+
+    <div class="card g-green" style="left:360px; top:140px; width:304px;" tabindex="0"
+      data-tip="Factory returning a thunk (a zero-arg function) — AsyncVectorEnv wants one thunk per sub-env so each process can build its own copy. Assembles the whole right-hand stack; recorder layers only on env 0, NoisyTVWrapper on every env (vector envs need homogeneous spaces).">
+      <div class="card-h"><span class="chip"></span><span class="stereo">function</span><span class="cname">make_env(…)</span><span class="lref">:320</span></div>
+      <div class="row"><span class="d">returns thunk() → fully wrapped env</span></div>
+      <div class="row"><span class="d">assembles the stack at right, inner→outer</span></div>
+      <div class="row"><span class="d">tv / video layers included per flags</span></div>
+    </div>
+
+    <div class="card g-green" style="left:360px; top:310px; width:304px;" tabindex="0"
+      data-tip="GAE that is correct under gymnasium 1.x NEXT_STEP autoreset: walls off the fake discarded-action reset step so it contributes no advantage and blocks flow into earlier steps. episodic=True cuts bootstrap at episode ends (extrinsic); episodic=False never cuts (intrinsic, RND's non-episodic return).">
+      <div class="card-h"><span class="chip"></span><span class="stereo">function</span><span class="cname">compute_gae(…)</span><span class="lref">:397</span></div>
+      <div class="row"><span class="d">NEXT_STEP-safe GAE · episodic flag per reward stream</span></div>
+    </div>
+
+    <div class="card g-green" style="left:360px; top:400px; width:304px;" tabindex="0"
+      data-tip="Mean over real steps only — the mask zeroes NEXT_STEP fake (discarded-action) steps out of every PPO loss term. NaN-safe when a mask is all zero.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">function</span><span class="cname">masked_mean(x, mask)</span><span class="lref">:451</span></div>
+    </div>
+
+    <div class="card g-green" style="left:360px; top:462px; width:304px;" tabindex="0"
+      data-tip="Orthogonal weight init + zero bias, std √2 by default. Every layer of Agent and RNDModel passes through it; the Agent's heads override std (0.01 actor/critics, 0.1 extra_layer).">
+      <div class="card-h"><span class="chip"></span><span class="stereo">function</span><span class="cname">layer_init(layer, std=√2)</span><span class="lref">:18</span></div>
+    </div>
+
+    <div class="card g-green" style="left:360px; top:524px; width:304px;" tabindex="0"
+      data-tip="Nature-DQN backbone (4,84,84)→512 — used by ppo.py, count_based.py and count_based_ae.py. rnd.py does NOT use it: its Agent has a wider 448-dim two-FC trunk matching the RND paper's CNN policy.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">nn.Module</span><span class="cname">NatureCNN</span><span class="lref">:24</span></div>
+      <div class="row"><span class="d">(4,84,84) → 512 — ppo.py's backbone, <b>not</b> used by rnd.py</span></div>
+    </div>
+
+    <div class="card g-green" style="left:360px; top:614px; width:304px;" tabindex="0"
+      data-tip="check_tv_geometry (:251): validates --tv-* geometry at startup in every mode. tv_region_slices (:270): single source for the patch's (row, col) slices — shared by the wrapper's _stamp, rnd.py's occlusion diagnostic and check_noisy_tv.py. check_tv_args_match (:282): aborts a --resume whose tv flags differ from the checkpoint's.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">functions</span><span class="cname">TV guards</span><span class="lref">:251–:317</span></div>
+      <div class="row"><span class="m">check_tv_geometry <span class="lref">:251</span></span>
+        <span class="d">fail fast on bad --tv-* geometry, all modes</span></div>
+      <div class="row"><span class="m">tv_region_slices <span class="lref">:270</span></span>
+        <span class="d">patch region arithmetic, single source</span></div>
+      <div class="row"><span class="m">check_tv_args_match <span class="lref">:282</span></span>
+        <span class="d">--resume guard against tv-flag mismatch</span></div>
+    </div>
+
+    <div class="card g-green" style="left:360px; top:815px; width:304px;" tabindex="0"
+      data-tip="Recording & probe wrappers, env 0 only: NewRoomRecorder (:69) writes an mp4 whenever an episode sets a new rooms-visited high-water mark; OverlayFrameProbe (:112) exposes overlay_render() uniformly so envs.call() is safe on the whole vector env.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">classes</span><span class="cname">recorders &amp; probes</span><span class="lref">:69·:112</span></div>
+      <div class="row"><span class="d">NewRoomRecorder · OverlayFrameProbe — env-0 video layers, see stack ↓</span></div>
+    </div>
+
+    <!-- right column: wrapper stack, inner → outer -->
+    <div class="card g-violet" style="left:696px; top:140px; width:340px;" tabindex="0"
+      data-tip="The emulator itself (gym.make(env_id, frameskip=1)). Minimal action set = Discrete(18); remote/sham-remote later extend it to 19. Sticky actions p=0.25 are the sole reset stochasticity under paper conditions.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">ale_py</span><span class="cname">AtariEnv</span><span class="lref">emulator</span></div>
+      <div class="row"><span class="d">210×160×3 RGB · Discrete(18) · sticky p=0.25 · 60 Hz</span></div>
+    </div>
+
+    <div class="card g-green" style="left:696px; top:222px; width:340px;" tabindex="0"
+      data-tip="Reads the room id from Atari RAM byte 3 after every step and adds rooms_visited to the episode-end info — the thesis's primary exploration metric. Observation passes through untouched.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">gym.Wrapper</span><span class="cname">RoomTracker</span><span class="lref">base.py:45</span></div>
+      <div class="row"><span class="d">RAM byte 3 → rooms_visited metric · obs unchanged</span></div>
+    </div>
+
+    <div class="card g-violet" style="left:696px; top:304px; width:340px;" tabindex="0"
+      data-tip="Nature-DQN preprocessing (Machado et al. 2018 revision): repeats each action over 4 raw frames (rewards summed), reads the last two frames as grayscale straight off the ALE, takes their pixel-wise max (flicker removal), area-resizes to 84×84 uint8. terminal_on_life_loss=False — full episodes. This branch: noop_max=30; the paper-conditions branch (PR #23) sets noop_max=0 and an 18,000-frame (5-min) cap.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">gymnasium</span><span class="cname">AtariPreprocessing</span><span class="lref">wrapper</span></div>
+      <div class="row"><span class="d">action ×4, rewards summed · max-pool last 2 frames</span></div>
+      <div class="row"><span class="d">grayscale · 84×84 · terminal_on_life_loss=False</span></div>
+    </div>
+
+    <div class="card g-green dashed" style="left:696px; top:408px; width:340px;" tabindex="0"
+      data-tip="Only constructed when --tv-mode ≠ off — the off stack is byte-identical to the pre-TV code path. Stamps a 12×84 uniform-noise patch over the HUD band after AtariPreprocessing (it must sit here: AtariPreprocessing reads the screen straight off the ALE object). remote/sham-remote add action 18, NOOP-mapped; in remote it resamples the patch — 'pressing the TV remote'. RNG: default_rng([seed, 0x7F00D]), decorrelated from the env's own seed stream, persists across autoresets.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">gym.Wrapper</span><span class="cname">NoisyTVWrapper</span><span class="lref">base.py:131</span></div>
+      <div class="row"><span class="d">--tv-mode ≠ off only · stamps 12×84 noise patch (HUD band)</span></div>
+      <div class="row"><span class="d">remote/sham-remote: +1 NOOP-mapped action → Discrete(19)</span></div>
+      <div class="row"><span class="d">modes: static · remote · sham-remote</span></div>
+    </div>
+
+    <div class="card g-violet" style="left:696px; top:569px; width:340px;" tabindex="0"
+      data-tip="Rolling deque of the last 4 processed frames → observation (4,84,84) uint8. Slot 0 oldest, slot 3 newest — rnd.py's [:, 3:4] slice for the RND input reads slot 3.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">gymnasium</span><span class="cname">FrameStackObservation(4)</span></div>
+      <div class="row"><span class="d">→ (4,84,84) uint8 · slot 3 = newest frame</span></div>
+    </div>
+
+    <div class="card g-violet" style="left:696px; top:651px; width:340px;" tabindex="0"
+      data-tip="Writes infos['episode']['r'/'l'] at episode end (gymnasium 1.x format, masked by infos['_episode']). Sits BELOW ClipReward, so logged episodic return is always the true game score.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">gymnasium</span><span class="cname">RecordEpisodeStatistics</span><span class="lref">wrapper</span></div>
+      <div class="row"><span class="d">episode return/length into infos — true game score</span></div>
+    </div>
+
+    <div class="card g-violet" style="left:696px; top:733px; width:340px;" tabindex="0"
+      data-tip="Clips only the reward the agent trains on to [−1, 1] (RND paper, Appendix A.3). Default on (--clip-reward); logging is unaffected because episode statistics were already recorded one layer below.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">gymnasium</span><span class="cname">ClipReward(−1, 1)</span><span class="lref">wrapper</span></div>
+      <div class="row"><span class="d">training reward only — logged score already captured</span></div>
+    </div>
+
+    <div class="card g-green dashed" style="left:696px; top:815px; width:340px;" tabindex="0"
+      data-tip="Flag-gated and env 0 only. --overlay-video → OverlayFrameProbe (base.py:112). --capture-video → RecordVideo (gymnasium) every N episodes, plus NewRoomRecorder (base.py:69) stacked on top when --record-room-discovery. overlay and capture are mutually exclusive (enforced in each agent's train()).">
+      <div class="card-h"><span class="chip"></span><span class="stereo">env 0 only</span><span class="cname">video layers</span><span class="lref">flag-gated</span></div>
+      <div class="row"><span class="d">OverlayFrameProbe <b>or</b> RecordVideo (+ NewRoomRecorder)</span></div>
+      <div class="row"><span class="d">green = base.py · RecordVideo itself is gymnasium</span></div>
+    </div>
+
+    <div class="card g-violet" style="left:696px; top:937px; width:340px;" tabindex="0"
+      data-tip="train() builds one thunk per env and hands them to gym.vector.AsyncVectorEnv (default; --sync-envs falls back to SyncVectorEnv). Autoreset mode is NEXT_STEP — the reason compute_gae and masked_mean exist. Seeds: envs.reset(seed=s) expands to s+i per sub-env.">
+      <div class="card-h"><span class="chip"></span><span class="stereo">gymnasium</span><span class="cname">AsyncVectorEnv</span><span class="lref">×32 thunks</span></div>
+      <div class="row"><span class="d">NEXT_STEP autoreset · per-env seed s+i · steps in parallel</span></div>
+    </div>
+  </div></div>
+
+  <details>
+    <summary>Table view — every symbol, with file and line</summary>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Symbol</th><th>Kind</th><th>Where</th><th>Group</th><th>Role</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">parse_args</td><td>function</td><td class="mono">rnd.py:40</td><td><span class="gdot" style="background:var(--gy)"></span>orchestration</td><td>~45 CLI flags</td></tr>
+          <tr><td class="mono">Agent</td><td>nn.Module</td><td class="mono">rnd.py:152</td><td><span class="gdot" style="background:var(--gb)"></span>policy</td><td>trunk + actor + critic_ext + critic_int (1.41M params)</td></tr>
+          <tr><td class="mono">Agent.get_value</td><td>method</td><td class="mono">rnd.py:182</td><td><span class="gdot" style="background:var(--gb)"></span>policy</td><td>(V_ext, V_int) bootstrap values</td></tr>
+          <tr><td class="mono">Agent.get_action_and_value</td><td>method</td><td class="mono">rnd.py:187</td><td><span class="gdot" style="background:var(--gb)"></span>policy</td><td>action, log-prob, entropy, both values</td></tr>
+          <tr><td class="mono">RNDModel</td><td>nn.Module</td><td class="mono">rnd.py:203</td><td><span class="gdot" style="background:var(--ga)"></span>RND</td><td>frozen target (1.68M) + trained predictor (2.20M)</td></tr>
+          <tr><td class="mono">RewardForwardFilter</td><td>class</td><td class="mono">rnd.py:246</td><td><span class="gdot" style="background:var(--ga)"></span>RND</td><td>discounted running intrinsic return → normalisation</td></tr>
+          <tr><td class="mono">_save_checkpoint / _load_checkpoint</td><td>functions</td><td class="mono">rnd.py:261 / :281</td><td><span class="gdot" style="background:var(--gy)"></span>orchestration</td><td>full state; TV-guard before restore</td></tr>
+          <tr><td class="mono">resolve_update_proportion</td><td>function</td><td class="mono">rnd.py:300</td><td><span class="gdot" style="background:var(--gy)"></span>orchestration</td><td>auto min(1, 32/num_envs)</td></tr>
+          <tr><td class="mono">_normalize_obs</td><td>function</td><td class="mono">rnd.py:314</td><td><span class="gdot" style="background:var(--ga)"></span>RND</td><td>per-pixel whitening, clip ±5</td></tr>
+          <tr><td class="mono">_rnd_error</td><td>function</td><td class="mono">rnd.py:321</td><td><span class="gdot" style="background:var(--ga)"></span>RND</td><td>‖target − predictor‖²/2 = raw intrinsic reward</td></tr>
+          <tr><td class="mono">train</td><td>function</td><td class="mono">rnd.py:327</td><td><span class="gdot" style="background:var(--gy)"></span>orchestration</td><td>envs · networks · rollout · GAE · update · logging</td></tr>
+          <tr><td class="mono">layer_init</td><td>function</td><td class="mono">base.py:18</td><td><span class="gdot" style="background:var(--gg)"></span>base.py</td><td>orthogonal init, std √2 / overrides</td></tr>
+          <tr><td class="mono">NatureCNN</td><td>nn.Module</td><td class="mono">base.py:24</td><td><span class="gdot" style="background:var(--gg)"></span>base.py</td><td>ppo.py's backbone — not used by rnd.py</td></tr>
+          <tr><td class="mono">RoomTracker</td><td>gym.Wrapper</td><td class="mono">base.py:45</td><td><span class="gdot" style="background:var(--gg)"></span>base.py</td><td>RAM byte 3 → rooms_visited</td></tr>
+          <tr><td class="mono">NewRoomRecorder</td><td>gym.Wrapper</td><td class="mono">base.py:69</td><td><span class="gdot" style="background:var(--gg)"></span>base.py</td><td>mp4 on new room high-water mark</td></tr>
+          <tr><td class="mono">OverlayFrameProbe</td><td>gym.Wrapper</td><td class="mono">base.py:112</td><td><span class="gdot" style="background:var(--gg)"></span>base.py</td><td>uniform overlay_render() across sub-envs</td></tr>
+          <tr><td class="mono">NoisyTVWrapper</td><td>gym.Wrapper</td><td class="mono">base.py:131</td><td><span class="gdot" style="background:var(--gg)"></span>base.py</td><td>noise patch + remote action; modes static/remote/sham-remote</td></tr>
+          <tr><td class="mono">check_tv_geometry · tv_region_slices · check_tv_args_match</td><td>functions</td><td class="mono">base.py:251–:317</td><td><span class="gdot" style="background:var(--gg)"></span>base.py</td><td>TV geometry validation · region slices · resume guard</td></tr>
+          <tr><td class="mono">make_env</td><td>function</td><td class="mono">base.py:320</td><td><span class="gdot" style="background:var(--gg)"></span>base.py</td><td>factory: thunk building the full wrapper stack</td></tr>
+          <tr><td class="mono">compute_gae</td><td>function</td><td class="mono">base.py:397</td><td><span class="gdot" style="background:var(--gg)"></span>base.py</td><td>NEXT_STEP-safe GAE, episodic flag</td></tr>
+          <tr><td class="mono">masked_mean</td><td>function</td><td class="mono">base.py:451</td><td><span class="gdot" style="background:var(--gg)"></span>base.py</td><td>fake-step-masked loss means</td></tr>
+          <tr><td class="mono">AtariEnv</td><td>env</td><td class="mono">ale_py</td><td><span class="gdot" style="background:var(--gv)"></span>library</td><td>emulator · Discrete(18) · sticky p=0.25</td></tr>
+          <tr><td class="mono">AtariPreprocessing · FrameStackObservation · RecordEpisodeStatistics · ClipReward · RecordVideo</td><td>wrappers</td><td class="mono">gymnasium</td><td><span class="gdot" style="background:var(--gv)"></span>library</td><td>Nature-DQN preprocessing · stack · stats · clip · video</td></tr>
+          <tr><td class="mono">RunningMeanStd</td><td>class</td><td class="mono">gymnasium</td><td><span class="gdot" style="background:var(--gv)"></span>library</td><td>obs_rms (per-pixel) · reward_rms (scalar)</td></tr>
+          <tr><td class="mono">Adam · Categorical</td><td>classes</td><td class="mono">torch</td><td><span class="gdot" style="background:var(--gv)"></span>library</td><td>optimizer over agent ∪ predictor · action distribution</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </details>
+
+  <p class="note">Episode-condition note: the <code>AtariPreprocessing</code> card reflects this
+  branch (<code>fix-update-proportion</code>), where <code>noop_max=30</code> and no frame cap are
+  still in place. The paper-conditions branch (PR #23, <code>env-episode-cap-5min</code>) sets
+  <code>noop_max=0</code> and caps episodes at 18,000 raw frames (5 minutes) — the SCHWERT batch
+  runs with both changes.</p>
+</div>
+
+<div id="tip" role="status"></div>
+<script>
+  const tip = document.getElementById("tip");
+  const pad = 14;
+  function show(el, x, y) {
+    tip.textContent = el.dataset.tip;
+    tip.style.display = "block";
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    let left = x + pad, top = y + pad;
+    if (left + w > innerWidth - 8) left = x - w - pad;
+    if (top + h > innerHeight - 8) top = y - h - pad;
+    tip.style.left = Math.max(8, left) + "px";
+    tip.style.top = Math.max(8, top) + "px";
+  }
+  document.querySelectorAll("[data-tip]").forEach((el) => {
+    el.addEventListener("mousemove", (e) => show(el, e.clientX, e.clientY));
+    el.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+    el.addEventListener("focus", () => {
+      const r = el.getBoundingClientRect();
+      show(el, r.left + r.width / 2, r.top + r.height / 2);
+    });
+    el.addEventListener("blur", () => { tip.style.display = "none"; });
+  });
+</script>
