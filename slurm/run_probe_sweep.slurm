@@ -18,7 +18,10 @@
 #
 #   TV_MODE   one of the 4 RND arms: off | remote | sham-remote | static
 #             (PPO arms have no rnd_model_state_dict and CANNOT be probed)
-#   SEED      42 | 43 | 44
+#   SEED      42 | 43 | 44 (untagged v2 batch) or 100 | 200 | 300 (SCHWERT batch)
+#   RUN_TAG   optional exp-name tag matching the training run's RUN_TAG (e.g.
+#             SCHWERT -> probes rnd_tv_<mode>_SCHWERT__<seed> runs); leave unset
+#             for the untagged v2 runs
 #   NUM_FRAMES   optional, default 4096 (halve to 2048 to ~halve wall-clock)
 #   NUM_FRESH    optional, default 8   (content-sensitivity averaging draws)
 #
@@ -28,6 +31,7 @@
 #
 # Usage (submit from the project root; slurm-logs/ is committed so the path exists):
 #   sbatch --export=ALL,SEED=42,TV_MODE=remote slurm/run_probe_sweep.slurm
+#   sbatch --export=ALL,SEED=100,TV_MODE=remote,RUN_TAG=SCHWERT slurm/run_probe_sweep.slurm
 # Or fire the whole 3-seed x 4-arm matrix via slurm/submit_probe_sweep.sh.
 
 set -eo pipefail
@@ -66,22 +70,22 @@ conda activate "$CONDA_ENV_PREFIX"
 SCRATCH="${SCRATCH:-/scratch/$USER}/montezuma"
 
 # Checkpoint dir: run_name embeds env_id (which contains a '/'), so the on-disk
-# layout is  $SCRATCH/checkpoints/ALE/MontezumaRevenge-v5__rnd_tv_<mode>__<seed>__<ts>/
+# layout is  $SCRATCH/checkpoints/ALE/MontezumaRevenge-v5__rnd_tv_<mode>[_<tag>]__<seed>__<ts>/
 CK="$SCRATCH/checkpoints/ALE/MontezumaRevenge-v5"
-GLOB="${CK}__rnd_tv_${TV_MODE}__${SEED}__*/ckpt_*.pt"
+GLOB="${CK}__rnd_tv_${TV_MODE}${RUN_TAG:+_${RUN_TAG}}__${SEED}__*/ckpt_*.pt"
 
 # Fail fast with a clear message if the run's checkpoints are not there yet.
 if ! compgen -G "$GLOB" > /dev/null; then
     echo "ERROR: no checkpoints matched: $GLOB" >&2
-    echo "  (has the SEED=${SEED} TV_MODE=${TV_MODE} training run finished a checkpoint yet?)" >&2
+    echo "  (has the SEED=${SEED} TV_MODE=${TV_MODE}${RUN_TAG:+ RUN_TAG=${RUN_TAG}} training run finished a checkpoint yet?)" >&2
     exit 2
 fi
 
 OUT_DIR="$PROJECT_DIR/analysis/probe"
 mkdir -p "$OUT_DIR"
-OUT="$OUT_DIR/probe_rnd_tv_${TV_MODE}__${SEED}.csv"
+OUT="$OUT_DIR/probe_rnd_tv_${TV_MODE}${RUN_TAG:+_${RUN_TAG}}__${SEED}.csv"
 
-echo "=== probe sweep  arm=${TV_MODE} seed=${SEED}  frames=${NUM_FRAMES:-4096} fresh=${NUM_FRESH:-8} ==="
+echo "=== probe sweep  arm=${TV_MODE}${RUN_TAG:+_${RUN_TAG}} seed=${SEED}  frames=${NUM_FRAMES:-4096} fresh=${NUM_FRESH:-8} ==="
 echo "checkpoints: $(compgen -G "$GLOB" | wc -l)   ->   $OUT"
 
 python scripts/probe_patch_response.py --device cpu \

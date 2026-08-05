@@ -12,6 +12,7 @@
 #   SEEDS="42" bash slurm/submit_probe_sweep.sh   # just one seed (e.g. as its runs land)
 #   ARMS="remote static" bash slurm/submit_probe_sweep.sh   # subset of arms
 #   NUM_FRAMES=2048 bash slurm/submit_probe_sweep.sh        # ~half wall-clock per job
+#   RUN_TAG=SCHWERT SEEDS="100 200 300" bash slurm/submit_probe_sweep.sh  # SCHWERT batch
 #
 # Re-running after new checkpoints appear (e.g. once seed 44 finishes) just
 # re-globs whatever exists -- that is the whole point. A job whose run has no
@@ -30,6 +31,7 @@ WALLTIME="${WALLTIME:-03:00:00}"        # ceiling; a run's ~49 ckpts take ~1-1.5
 PARTITION="${PARTITION:-Debug_node}"    # the only partition on kiwihead01
 NUM_FRAMES="${NUM_FRAMES:-4096}"
 NUM_FRESH="${NUM_FRESH:-8}"
+RUN_TAG="${RUN_TAG:-}"                  # e.g. SCHWERT; empty = untagged v2 runs
 STAMP="$(date +%Y%m%d_%H%M%S)"
 OUT="slurm-logs/probe_sweep_${STAMP}.tsv"
 mkdir -p slurm-logs
@@ -37,7 +39,7 @@ mkdir -p slurm-logs
 # submit  seed  arm
 submit() {
     local seed="$1" arm="$2"
-    local exports="ALL,SEED=${seed},TV_MODE=${arm},NUM_FRAMES=${NUM_FRAMES},NUM_FRESH=${NUM_FRESH}"
+    local exports="ALL,SEED=${seed},TV_MODE=${arm},NUM_FRAMES=${NUM_FRAMES},NUM_FRESH=${NUM_FRESH}${RUN_TAG:+,RUN_TAG=${RUN_TAG}}"
     local cmd=(sbatch --parsable --partition="$PARTITION" --time="$WALLTIME"
                --export="$exports" "$SCRIPT")
     if [ "$DRY_RUN" = "1" ]; then
@@ -49,7 +51,7 @@ submit() {
     printf "%s\t%s\tseed=%s\n" "$jid" "$arm" "$seed" | tee -a "$OUT"
 }
 
-echo "=== patch-response probe sweep  commit: $(git rev-parse --short HEAD)  seeds='${SEEDS}' arms='${ARMS}' frames=${NUM_FRAMES} ==="
+echo "=== patch-response probe sweep  commit: $(git rev-parse --short HEAD)  seeds='${SEEDS}' arms='${ARMS}' tag='${RUN_TAG}' frames=${NUM_FRAMES} ==="
 [ "$DRY_RUN" != "1" ] && echo "Job IDs -> $OUT"
 
 for s in $SEEDS; do
