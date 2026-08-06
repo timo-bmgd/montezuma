@@ -71,8 +71,8 @@ def main():
     es, ev = series(ea, "charts/episodic_return")
 
     fig, axes = plt.subplots(
-        5, 1, figsize=(6.3, 8.2), sharex=True,
-        gridspec_kw={"hspace": 0.5, "height_ratios": [1.5, 1, 1, 1, 1]}, dpi=200,
+        3, 1, figsize=(6.3, 5.6), sharex=True,
+        gridspec_kw={"hspace": 0.5, "height_ratios": [1.5, 1, 1]}, dpi=200,
     )
 
     # --- panel A: the episodes themselves ---
@@ -118,11 +118,7 @@ def main():
     ax.axhline(1 / 19, color=MUTED, linewidth=1, linestyle=(0, (2, 3)))
     ax.annotate("chance 1/19", xy=(HI / 1e6, 1 / 19), xytext=(0, 3),
                 textcoords="offset points", ha="right", color=MUTED, fontsize=7.5)
-    line_panel(axes[3], *series(ea, "charts/ext_value_mean"),
-               "Extrinsic value estimate  charts/ext_value_mean")
-    line_panel(axes[4], *series(ea, "losses/entropy"), "Policy entropy (nats)",
-               ylim=(0, 1.6))
-    axes[4].set_xlabel("environment steps (millions)", fontsize=9, color=INK)
+    ax.set_xlabel("environment steps (millions)", fontsize=9, color=INK)
 
     for ax in axes:
         style_axis(ax)

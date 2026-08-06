@@ -108,7 +108,7 @@ in room 1 (return 100) → 48 additionally opened a door but still died inside r
 the burst's peak, an episode had a ~2% chance of leaving room 1. For contrast, the
 preceding 3.6M steps (5,855 episodes): 61 keys, 3 doors, 2 exits.
 
-## What the statistics do during the burst (figure panels, top to bottom)
+## What the statistics do during the burst (first two are the figure's lower panels; the value/entropy numbers are context only)
 
 - **Raw intrinsic reward** (`charts/raw_intrinsic_rew_mean`, batch mean per iteration):
   baseline ~15 with sharp spikes to 40+ aligned with the multi-room episodes — each
@@ -139,8 +139,8 @@ preceding 3.6M steps (5,855 episodes): 61 keys, 3 doors, 2 exits.
 > annotated are the first 4-room episode (step 8.03M), the recorded video episode
 > (8.63M, footnote X), and the singular 5-room episode (8.97M; 17,005 steps, 500
 > points). Below, per-iteration training statistics over the same window: raw intrinsic
-> reward (novelty spikes aligned with the excursions), remote-press fraction (peaking at
-> ≈ 3× chance at the burst's core), extrinsic value estimate, and policy entropy.
+> reward (novelty spikes aligned with the excursions) and remote-press fraction (peaking
+> at ≈ 3× chance at the burst's core, back below chance by 9.3M).
 
 ## Reproduction
 
