@@ -126,7 +126,7 @@ All from `analysis/HPC-Runs/runs/ALE/MontezumaRevenge-v5__rnd_tv_remote__43__178
 | `tv_intrinsic_share` | ≈ 0.01 (first 1M) → 0.19–0.24 (final buckets) |
 | `raw_intrinsic_rew_mean` | 29.9 (first 1M) → ~15 baseline; local bumps to 18.5 (burst) and 16–17 (re-acquisition) |
 | Sham-remote s44 (the only other consolidator) | 1,743 exits, all on a 2-room route ({2: 1,742; 4: 1}); onset ~12M, ~88% exit rate late in the run, mean return ≈ 357 in the last 3M |
-| Recorded video | env-0 episode 521 (`new_room_ep00521_r04.mp4`), from the 8–9M burst; <https://youtube.com/shorts/4pNE5FtkZec> |
+| Recorded video | env-0 episode 521 (`new_room_ep00521_r04.mp4`) = the episode at step 8,630,624 (4 rooms, return 400, length 4,376 — identified by frame count, see `doc/results-lucky-run-context.md`); <https://youtube.com/shorts/4pNE5FtkZec> |
 
 Cross-checks worth keeping in mind when editing: reward clipping means key = +1, door = +1
 for the learner (true scores 100/300 appear only in logging, which records pre-clip
