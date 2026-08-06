@@ -14,6 +14,64 @@ All 568 multi-room episodes as CSV: `doc/lucky-run-multiroom-episodes.csv`
 (columns: record index, global step, rooms, return, length, gap to previous multi-room
 episode in steps and in episodes).
 
+## The Lucky Remote Run — section skeleton (figures + configuration)
+
+One run of the batch — `rnd_tv_remote`, seed 43 — did what no other run in any condition
+did: it left room 1 repeatedly, reached a fourth room 341 times and once a fifth, and
+ended its 20M-step budget with a quarter of all episodes escaping room 1.
+
+**Figure A — full-run overview** (acquisition → near-extinction → re-acquisition;
+caption draft in `doc/discussion-lucky-run.md`):
+
+![Full-run overview: episodes leaving room 1, mean return, extrinsic value, entropy](figures/lucky-run-rnd_tv_remote_s43.png)
+
+**Figure B — episode-level zoom of the first acquisition burst** (caption draft in
+§Suggested figure caption below):
+
+![Burst zoom: rooms per episode, raw intrinsic reward, remote-press fraction](figures/lucky-run-burst_s43.png)
+
+### Configuration of this run, and how it differs from the SCHWERT re-run
+
+Verified directly from the logged hyperparameters of both runs (not from the docs — see
+the warning below):
+
+| Parameter | this run (v2 batch, seed 42/43/44) | SCHWERT re-run (seeds 100/200/300) |
+|---|---|---|
+| `update_proportion` (share of the batch the RND predictor trains on) | **0.25** (old hard-coded default) | **1.0** (auto rule `min(1, 32/num_envs)`, the paper-equivalent rate at 32 envs) |
+| everything else logged | identical | identical |
+
+Shared by both: 20M steps, 32 envs, lr 1e-4 (annealed), `ent_coef` 0.001,
+`int_coef`/`ext_coef` 1.0/2.0, `gamma`/`int_gamma` 0.999/0.99, reward clipping, TV patch
+12×84 at (0,0) with per-step refresh, sticky actions 0.25, `noop_max=30`, 30-min episode
+cap. That last pair is deliberate wording — see the warning.
+
+Interpretation for the section: the lucky run trained its RND predictor at **a quarter of
+the paper-equivalent rate**, so prediction error — for new rooms and TV patch alike —
+decayed roughly 4× slower per environment step. That is systematically favourable to
+sustained novelty: it lengthens the window in which rooms 2–4 keep paying intrinsic
+reward after discovery (the burst) and it slows the extinction of the patch's reward
+(the capture side). Under the corrected rate, none of the three SCHWERT remote seeds
+ever left room 1 — consistent with a narrower luck window, though with three seeds per
+config this is a compatible observation, not a causal claim. Honest counterpoint: the
+lucky run's sibling seeds 42 and 44 shared the favourable 0.25 setting and still never
+left room 1 — the setting widens the window; luck still has to walk through it.
+
+> **⚠ Documentation/config discrepancy found while verifying this (affects the
+> methodology chapter, not just this section).** `doc/decisions.md` (2026-07-29 entry)
+> and `CLAUDE.md` describe the SCHWERT batch as running RND-paper episode conditions
+> (5-min = 4,500-step episode cap, `noop_max=0`). This is **not what ran**: PR #23,
+> which contains those changes, is still open — `base.py` on `main` has `noop_max=30`
+> and no episode cap, and the SCHWERT event data confirms it (max episode lengths
+> 21,420 and 27,000 steps; 67–90 episodes ≥ 4,500 steps per run — impossible under the
+> cap). Consequences: (1) the v2 batch and SCHWERT are *more* comparable than the docs
+> suggest — they differ in exactly one hyperparameter, `update_proportion`; (2) the
+> thesis must not describe SCHWERT as the "paper episode conditions" re-run, only as the
+> corrected-predictor-rate re-run; (3) `decisions.md`'s 2026-07-29 entry ("Shipped in
+> PR #23") and the 2026-07-31 PPO-reuse entry's premise need correcting, or PR #23 needs
+> merging and a fresh batch. The 5-room, 17,005-step episode in this run would have been
+> impossible under the intended 4,500-step cap — worth one sentence in the section
+> either way.
+
 ## Q1 — Was there one specific super-lucky first episode that got all 4 rooms?
 
 Yes, with a two-step precursor structure. The first 4-room episode is a single,
